@@ -1,0 +1,29 @@
+@PACKAGE_INIT@
+
+# Cadmus Engine Package Configuration
+# This file helps other CMake projects find and use the Cadmus Engine library
+
+include(CMakeFindDependencyMacro)
+
+# Find dependencies that Cadmus Engine needs
+# Add any required dependencies here, for example:
+# find_dependency(SomeRequiredPackage)
+
+# Include the targets file that defines Cadmus::Engine and helper targets
+include("${CMAKE_CURRENT_LIST_DIR}/GlobalTargets.cmake")
+
+# Verify that the expected targets were imported
+check_required_components(Cadmus)
+
+# Optional: Set some useful variables for consumers
+set(Cadmus_VERSION @PROJECT_VERSION@)
+set(Cadmus_VERSION_MAJOR @PROJECT_VERSION_MAJOR@)
+set(Cadmus_VERSION_MINOR @PROJECT_VERSION_MINOR@)
+set(Cadmus_VERSION_PATCH @PROJECT_VERSION_PATCH@)
+
+# Optional: Provide information about what was found
+if(NOT TARGET Cadmus::Engine)
+    message(FATAL_ERROR "Expected target Cadmus::Engine not found!")
+endif()
+
+message(STATUS "Found Cadmus Engine version ${Cadmus_VERSION}")
