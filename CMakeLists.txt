@@ -7,7 +7,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 #Options
-# option(BUILD_EXAMPLES "Build samples (SampleApplication)" ON)
+option(BUILD_EXAMPLES "Build samples (SampleApplication)" ON)
 option(ENABLE_WARNINGS "Enable project warning presets" ON)
 option(ENABLE_SANITIZERS "Enable sanitizers in Debug on non-MSVC" ON)
 option(ENABLE_UNITY "Enable unity/jumbo build for faster compiles" OFF)
