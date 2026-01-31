@@ -33,6 +33,16 @@ if(ENABLE_UNITY)
 set(CMAKE_UNITY_BUILD ON)
 endif()
 
+include(FetchContent)
+FetchContent_Declare(
+  toml11
+  GIT_REPOSITORY https://github.com/ToruNiina/toml11.git
+  GIT_TAG        v4.4.0
+)
+FetchContent_MakeAvailable(toml11)
+
+add_subdirectory(CadmusRHI)
+
 add_subdirectory(Engine)
 
 add_subdirectory(SampleApplication)

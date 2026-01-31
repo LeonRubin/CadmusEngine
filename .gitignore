@@ -1,1 +1,4 @@
 build/*
+build-*/
+vcpkg_installed/*
+.vcpkg/*

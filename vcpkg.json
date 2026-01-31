@@ -1,0 +1,7 @@
+{
+  "name": "cadmus-engine",
+  "version-string": "0.0.0",
+  "dependencies": [
+    "spdlog"
+  ]
+}
