@@ -18,6 +18,8 @@ namespace rhi
         int DesiredDeviceIdx = 0;
         int NumRequiredInstanceExtensions = 0;
         char const * const * RequiredInstanceExtensions = nullptr;
+        const bool EnableValidationLayers = true;
+        const bool EnableNativeLogging = true;
     };
 
     class CADMUS_RHI_API IContext

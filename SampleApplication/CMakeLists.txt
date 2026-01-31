@@ -16,13 +16,24 @@ endif()
 # Ensure SampleApplication rebuilds (and reruns the DLL copy step) when any backend DLL rebuilds.
 get_property(CADMUS_RHI_BACKEND_TARGETS GLOBAL PROPERTY CADMUS_RHI_BACKEND_TARGETS)
 if(CADMUS_RHI_BACKEND_TARGETS)
+    # Always copy rebuilt backend DLLs/PDBs next to SampleApplication after each build.
+    add_custom_target(copy_rhi_backends
+        DEPENDS ${CADMUS_RHI_BACKEND_TARGETS}
+        COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:SampleApplication>
+    )
+
     foreach(backend_target IN LISTS CADMUS_RHI_BACKEND_TARGETS)
-        add_custom_command(TARGET SampleApplication POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            $<TARGET_FILE:${backend_target}>
-            $<TARGET_FILE_DIR:SampleApplication>
-        COMMENT "Copying backend ${backend_target} to SampleApplication output")
+        add_custom_command(TARGET copy_rhi_backends POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    $<TARGET_FILE:${backend_target}>
+                    $<TARGET_FILE_DIR:SampleApplication>
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    $<TARGET_PDB_FILE:${backend_target}>
+                    $<TARGET_FILE_DIR:SampleApplication>
+        )
     endforeach()
+
+    add_dependencies(SampleApplication copy_rhi_backends)
 endif()
 
 

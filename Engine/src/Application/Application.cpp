@@ -36,6 +36,8 @@ void Init()
         {
             SDL_Log("Window could not be created! SDL_Error: %s\n", SDL_GetError());
         }
+        
+        gInitialized = true;
 
         screenSurface = SDL_GetWindowSurface(window);
 
@@ -81,7 +83,7 @@ void Init()
                     }
                 });
             }
-            
+
             auto createContextFunc = CDMPlatform::LoadModuleFunction<rhi::PFN_CreateRHIContext>(rendererModule, "CreateRHIContext");
             if(createContextFunc)
             {
@@ -94,7 +96,6 @@ void Init()
 
                 gRHIContext->Initialize(initParams);
             }
-
         }
     }
 }
@@ -120,6 +121,8 @@ void DeInit()
     // deinit
     if (gInitialized)
     {
+        delete gRHIContext;
+        gRHIContext = nullptr;
         SDL_DestroyWindow(window);
         SDL_Quit();
     }
