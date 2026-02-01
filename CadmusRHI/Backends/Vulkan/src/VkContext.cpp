@@ -5,19 +5,22 @@
 #include <algorithm>
 #include <map>
 
+#ifdef _WIN32
+#include <windows.h>
+#include <vulkan/vulkan_win32.h>
+#endif
 namespace rhi::vulkan
 {
     const std::vector<const char *> validationLayers = {
         "VK_LAYER_KHRONOS_validation"};
     VkDebugUtilsMessengerEXT gDebugMessenger;
-    
+
     FVulkanContext::FVulkanContext() = default;
 
     FVulkanContext::~FVulkanContext()
     {
         ReleaseInstance();
     }
-    
 
     bool checkValidationLayerSupport()
     {
@@ -26,13 +29,13 @@ namespace rhi::vulkan
         std::vector<VkLayerProperties> availableLayers(layerCount);
         vkEnumerateInstanceLayerProperties(&layerCount, availableLayers.data());
 
-        for (const char* requested : validationLayers)
+        for (const char *requested : validationLayers)
         {
             const bool found = std::any_of(availableLayers.begin(), availableLayers.end(),
-                [requested](const VkLayerProperties& props)
-                {
-                    return std::strcmp(requested, props.layerName) == 0;
-                });
+                                           [requested](const VkLayerProperties &props)
+                                           {
+                                               return std::strcmp(requested, props.layerName) == 0;
+                                           });
 
             if (!found)
             {
@@ -89,14 +92,45 @@ namespace rhi::vulkan
         return VK_FALSE;
     }
 
-    uint32_t selectPhysicalDevice(const std::vector<VkPhysicalDevice>& physicalDevices, int desiredIdx = -1)
+    bool checkDeviceExtSupport(VkPhysicalDevice device, const std::vector<const char *> &requiredExtensions)
+    {
+        uint32_t extensionCount;
+        vkEnumerateDeviceExtensionProperties(device, nullptr, &extensionCount, nullptr);
+        std::vector<VkExtensionProperties> availableExtensions(extensionCount);
+        vkEnumerateDeviceExtensionProperties(device, nullptr, &extensionCount, availableExtensions.data());
+
+        for (const char *requiredExt : requiredExtensions)
+        {
+            bool bFoundExt = false;
+            for (const auto &ext : availableExtensions)
+            {
+                if (strcmp(requiredExt, ext.extensionName) == 0)
+                {
+                    bFoundExt = true;
+                    break;
+                }
+            }
+
+            if (!bFoundExt)
+            {
+                char buf[256];
+                std::snprintf(buf, sizeof(buf), "Required Vulkan Device Extension not available: %s", requiredExt);
+                LogRHI(rhi::RHI_LOGLEVEL_ERROR, buf);
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    uint32_t FVulkanContext::SelectPhysicalDevice(const std::vector<VkPhysicalDevice> &physicalDevices, int desiredIdx)
     {
         VkPhysicalDeviceProperties properties{};
         VkPhysicalDeviceFeatures features{};
 
         std::multimap<int, int> candidates;
 
-        for(int i = 0; i < static_cast<int>(physicalDevices.size()); ++i)
+        for (int i = 0; i < static_cast<int>(physicalDevices.size()); ++i)
         {
             vkGetPhysicalDeviceProperties(physicalDevices[i], &properties);
             vkGetPhysicalDeviceFeatures(physicalDevices[i], &features);
@@ -106,21 +140,36 @@ namespace rhi::vulkan
             bool bCompatible = properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU;
             bCompatible &= features.geometryShader == VK_TRUE;
 
+            std::vector<rhi::vulkan::FVkQueueFamilyInfo> queueFamilyInfos;
+            EnumerateQueueFamilies(physicalDevices[i], queueFamilyInfos, Surface);
+
+            uint32_t graphicsQueueFamilyIndex = GetQueueFamilyWithFeatures(queueFamilyInfos, EQueueFeatures::GRAPHICS) != UINT32_MAX;
+            bCompatible &= graphicsQueueFamilyIndex != UINT32_MAX;
+
+            VkBool32 presentSupported;
+            vkGetPhysicalDeviceSurfaceSupportKHR(physicalDevices[i], graphicsQueueFamilyIndex, Surface, &presentSupported);
+            bCompatible &= presentSupported == VK_TRUE;
+            bCompatible &= checkDeviceExtSupport(physicalDevices[i], {VK_KHR_SWAPCHAIN_EXTENSION_NAME});
+
+            FSwapchainSupportDetails swapchainSupport = QuerySwapchainSupport(physicalDevices[i], Surface);
+            bCompatible &= !swapchainSupport.Formats.empty() && !swapchainSupport.PresentModes.empty();
+
             score += properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU ? 10 : 0;
             score += properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU ? 5 : 0;
-            
+
             candidates.insert({score, i});
 
-            if(bCompatible && i == desiredIdx && desiredIdx != -1)
+            if (bCompatible && i == desiredIdx && desiredIdx != -1)
             {
                 return i;
             }
         }
 
-        if(candidates.begin()->first > 0)
+        if (candidates.begin()->first > 0)
         {
             return candidates.rbegin()->second;
-        }else
+        }
+        else
         {
             return UINT32_MAX;
         }
@@ -180,7 +229,7 @@ namespace rhi::vulkan
                 debugCreateInfo.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
                 debugCreateInfo.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
                 debugCreateInfo.pfnUserCallback = debugCallback;
-                
+
                 createInfo.pNext = &debugCreateInfo;
             }
         }
@@ -242,24 +291,64 @@ namespace rhi::vulkan
 
         EnumerateAdapters();
 
-        if( AdapterInfos.empty())
+        if (AdapterInfos.empty())
         {
             LogRHI(rhi::RHI_LOGLEVEL_ERROR, "No Vulkan physical devices found.");
             return false;
         }
 
+#ifdef WIN32
+        // Create Surface for Windows
+        VkWin32SurfaceCreateInfoKHR surfaceCreateInfo{};
+        surfaceCreateInfo.sType = VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR;
+        surfaceCreateInfo.hinstance = GetModuleHandle(nullptr);
+        surfaceCreateInfo.hwnd = static_cast<HWND>(Params.WindowHandle);
+
+        VK_CHECK_RESULT(vkCreateWin32SurfaceKHR(Instance, &surfaceCreateInfo, nullptr, &Surface));
+#endif
+
         uint32_t deviceCount = AdapterInfos.size();
         std::vector<VkPhysicalDevice> physicalDevices(deviceCount);
         vkEnumeratePhysicalDevices(Instance, &deviceCount, physicalDevices.data());
 
-        auto physicalDeviceID = selectPhysicalDevice(physicalDevices, Params.DesiredDeviceIdx);
-        if(physicalDeviceID == UINT32_MAX)
+        auto physicalDeviceID = SelectPhysicalDevice(physicalDevices, Params.DesiredDeviceIdx);
+        if (physicalDeviceID == UINT32_MAX)
         {
             LogRHI(rhi::RHI_LOGLEVEL_ERROR, "No suitable Vulkan physical device found.");
             return false;
         }
 
-        
+        std::vector<FVkQueueFamilyInfo> QueueFamilyInfos;
+        EnumerateQueueFamilies(physicalDevices[physicalDeviceID], QueueFamilyInfos, Surface);
+        PhysicalDevice = physicalDevices[physicalDeviceID];
+
+        std::vector<FVkQueueFamilyInfo> RequiredQueueFamilies;
+
+        // Request Graphics, Compute Dedicated and Transfer Dedicated + anyone which supports present
+        // if no dedicated infos, we still get the compute or compute&transfer queue family in any case
+        for (int i = 0; i < static_cast<int>(QueueFamilyInfos.size()); ++i)
+        {
+            bool bRequired = false;
+
+            bRequired |= (QueueFamilyInfos[i].SupportsFeatures(EQueueFeatures::GRAPHICS));
+            bRequired |= (QueueFamilyInfos[i].SupportsFeatures(EQueueFeatures::COMPUTE) && !QueueFamilyInfos[i].SupportsFeatures(EQueueFeatures::GRAPHICS));
+            bRequired |= (QueueFamilyInfos[i].SupportsFeatures(EQueueFeatures::TRANSFER) && !QueueFamilyInfos[i].SupportsFeatures(EQueueFeatures::GRAPHICS) && !QueueFamilyInfos[i].SupportsFeatures(EQueueFeatures::COMPUTE));
+            bRequired |= (QueueFamilyInfos[i].bSupportsPresent);
+
+            if (bRequired)
+                RequiredQueueFamilies.push_back(QueueFamilyInfos[i]);
+        }
+
+        FVkAdapterCreateInfo adapterCreateInfo{};
+        adapterCreateInfo.PhysicalDevice = PhysicalDevice;
+        adapterCreateInfo.QueueFamilyInfos = RequiredQueueFamilies.data();
+        adapterCreateInfo.NumQueueFamilies = RequiredQueueFamilies.size();
+        adapterCreateInfo.NumQueuesPerFamily = 3; // God Loves 3
+
+        SelectedAdapter = new VkGraphicsAdapter(AdapterInfos[physicalDeviceID], adapterCreateInfo);
+
+        Swapchain = new VkSwapchain(SelectedAdapter->GetDevice(), PhysicalDevice, Surface);
+
         return true;
     }
 
@@ -323,9 +412,17 @@ namespace rhi::vulkan
     {
         if (Instance != VK_NULL_HANDLE)
         {
-            if(gDebugMessenger != VK_NULL_HANDLE)
+            if (gDebugMessenger != VK_NULL_HANDLE)
             {
                 DestroyDebugUtilsMessengerEXT(Instance, gDebugMessenger, nullptr);
+            }
+
+            vkDestroySurfaceKHR(Instance, Surface, nullptr);
+
+            if (SelectedAdapter)
+            {
+                delete SelectedAdapter;
+                SelectedAdapter = nullptr;
             }
 
             vkDestroyInstance(Instance, nullptr);

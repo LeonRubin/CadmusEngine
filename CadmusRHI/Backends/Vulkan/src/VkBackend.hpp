@@ -16,27 +16,6 @@
 
 namespace rhi::vulkan
 {
-    extern rhi::PFN_LoggerFunc gLoggerFunc;
-
-    class FVulkanGxAdapter : public IGxAdapter
-    {
-    public:
-        explicit FVulkanGxAdapter(FGxAdapterInfo info);
-        const FGxAdapterInfo& GetInfo() const override;
-
-    private:
-        FGxAdapterInfo Info;
-    };
-
-    class FVulkanSwapchain : public ISwapchain
-    {
-    public:
-        explicit FVulkanSwapchain(FSwapchainDesc desc);
-        const FSwapchainDesc& GetDesc() const override;
-
-    private:
-        FSwapchainDesc Desc;
-    };
 }
 
 extern "C" CADMUS_VULKAN_RHI_API rhi::IContext* CreateRHIContext();

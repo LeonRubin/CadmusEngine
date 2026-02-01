@@ -20,6 +20,7 @@ namespace rhi
         char const * const * RequiredInstanceExtensions = nullptr;
         const bool EnableValidationLayers = true;
         const bool EnableNativeLogging = true;
+        void* WindowHandle = nullptr;
     };
 
     class CADMUS_RHI_API IContext
