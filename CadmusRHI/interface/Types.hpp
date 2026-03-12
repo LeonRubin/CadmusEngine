@@ -4,7 +4,6 @@
 
 #include "Defs.hpp"
 #include "BitmaskTemplates.hpp"
-
 namespace rhi
 {
     enum class EQueueFeatures : uint32_t
@@ -46,6 +45,14 @@ namespace rhi
         BGRA8_UNorm
     };
 
+    enum class EDepthStencilFormat
+    {
+        Unknown,
+        D32_SFloat,
+        D24_UNorm_S8_UInt,
+        D32_SFloat_S8_UInt
+    };
+
     struct CADMUS_RHI_API FQueueCounts
     {
         uint32_t Graphics{0};
@@ -78,11 +85,14 @@ namespace rhi
         AnyHit = 10,
         ClosestHit = 11,
         Miss = 12,
-        Callable = 13
+        Callable = 13,
+        Count = 14,
+        Max = Count - 1
     };
 
     enum EShaderLanguage
     {
+        NONE,
         GLSL = 0,
         HLSL = 1,
         SPIRV = 2
@@ -130,8 +140,6 @@ namespace rhi
         float DepthBiasConstantFactor{0.0f};
         float DepthBiasClamp{0.0f};
         float DepthBiasSlopeFactor{0.0f};
-
-        constexpr FRasterizationStateDesc() = default;
     };
 
     struct FMultisampleStateDesc
@@ -222,6 +230,23 @@ namespace rhi
         OneMinusDstAlpha = 9
     };
 
+    enum class EVertexFormat : uint8_t
+    {
+        Float = 0,
+        Float2 = 1,
+        Float3 = 2,
+        Float4 = 3,
+        UInt = 4,
+        UInt2 = 5,
+        UInt3 = 6,
+        UInt4 = 7,
+        SInt = 8,
+        SInt2 = 9,
+        SInt3 = 10,
+        SInt4 = 11,
+        UByte4Norm = 12
+    };
+
     enum class EBlendOp : uint8_t
     {
         Add = 0,
@@ -241,4 +266,87 @@ namespace rhi
         RGBA = static_cast<uint32_t>(R) | static_cast<uint32_t>(G) | static_cast<uint32_t>(B) | static_cast<uint32_t>(A)
     };
     consteval void enable_bitmask_operators(EColorComponentFlags);
+
+
+    enum class ELoadOp : uint8_t
+    {
+        Load = 0,
+        Clear = 1,
+        DontCare = 2
+    };
+
+    enum class EStoreOp : uint8_t
+    {
+        Store = 0,
+        DontCare = 1
+    };
+
+    enum class EResolveMode : uint8_t
+    {
+        Average = 0,
+        Min = 1,
+        Max = 2,
+        SampleZero = 3
+    };
+
+    union UClearColorValue
+    {
+        float float32[4];
+        int int32[4];
+        unsigned int uint32[4];
+    };
+
+    enum
+    {
+        MAX_RENDER_TARGETS = 8
+    };
+
+
+    struct CADMUS_RHI_API FFrameBuffer final
+    {
+
+    };
+
+    // Rethink to be fillable via functions instead of direct filling? (heavily inspired by LVK)
+    struct CADMUS_RHI_API FDynamicRenderPass final
+    {
+        struct RenderTarget
+        {
+            ELoadOp LoadOp{ELoadOp::Load};
+            EStoreOp StoreOp{EStoreOp::Store};
+            EColorFormat Format{EColorFormat::Unknown};
+            EDepthStencilFormat DepthStencilFormat{EDepthStencilFormat::Unknown};
+
+            uint8_t layer = 0; // For array textures or 3D textures, specifies the layer to render to. Ignored for non-array 2D textures.
+            uint8_t level = 0; // don't remember
+
+            UClearColorValue ClearValue{.float32 = {0.0f, 0.0f, 0.0f, 1.0f}}; // Used if LoadOp is Clear
+            float clearDepth{1.0f};
+            uint32_t clearStencil{0};
+        };
+
+        RenderTarget ColorAttachments[MAX_RENDER_TARGETS];
+        RenderTarget DepthAttachment = {.LoadOp = ELoadOp::DontCare, .StoreOp = EStoreOp::DontCare};
+        RenderTarget StencilAttachment = {.LoadOp = ELoadOp::DontCare, .StoreOp = EStoreOp::DontCare};
+
+        uint32_t layerCount{1};
+        uint32_t viewMask{0xFFFFFFFFu}; // For multiview rendering, specifies which views to render to. Each bit corresponds to a view index.
+
+        FORCE_INLINE int GetColorAttachmentCount() const
+        {
+            int count = 0;
+            for (int i = 0; i < MAX_RENDER_TARGETS; ++i)
+            {
+                if (ColorAttachments[i].Format != EColorFormat::Unknown)
+                {
+                    ++count;
+                }
+                else
+                {
+                    break; // Assume that valid attachments are contiguous from the start
+                }
+            }
+            return count;
+        }
+    };
 }

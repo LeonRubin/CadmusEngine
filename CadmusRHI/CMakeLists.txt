@@ -44,3 +44,9 @@ if(CADMUS_RHI_BACKEND_TARGETS)
 	add_library(Cadmus::RHI::Backends ALIAS CadmusRHIBackends)
 	target_link_libraries(CadmusRHIBackends INTERFACE ${CADMUS_RHI_BACKEND_TARGETS})
 endif()
+
+option(CADMUS_RHI_BUILD_TESTS "Build CadmusRHI tests" ON)
+
+if(CADMUS_RHI_BUILD_TESTS AND BUILD_TESTING)
+	add_subdirectory(tests)
+endif()

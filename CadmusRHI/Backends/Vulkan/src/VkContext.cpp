@@ -9,6 +9,9 @@
 #include <windows.h>
 #include <vulkan/vulkan_win32.h>
 #endif
+
+#include "Pipeline/VkPipelineBuilder.hpp"
+#include "ImmediateCommandsBufferManager.hpp"
 namespace rhi::vulkan
 {
     const std::vector<const char *> validationLayers = {
@@ -320,6 +323,7 @@ namespace rhi::vulkan
 
         std::vector<FVkQueueFamilyInfo> QueueFamilyInfos;
         EnumerateQueueFamilies(physicalDevices[physicalDeviceID], QueueFamilyInfos, Surface);
+        ActiveQueueFamilyInfos = QueueFamilyInfos;
         PhysicalDevice = physicalDevices[physicalDeviceID];
 
         std::vector<FVkQueueFamilyInfo> RequiredQueueFamilies;
@@ -348,6 +352,79 @@ namespace rhi::vulkan
         SelectedAdapter = new VkGraphicsAdapter(AdapterInfos[physicalDeviceID], adapterCreateInfo);
 
         Swapchain = new VkSwapchain(SelectedAdapter->GetDevice(), PhysicalDevice, Surface);
+
+        ImmediateCmdBufferManager = new ImmediateCommandsBufferManager(this);
+        return true;
+    }
+
+    rhi::IPipelineBuilder* FVulkanContext::GetPipelineBuilder()
+    {
+        return new VkPipelineBuilder(SelectedAdapter->GetDevice());
+    }
+
+    rhi::ICommandBuffersPool* FVulkanContext::GetCommandBuffersPool(EQueueFeatures RequiredFeatures)
+    {
+        (void)RequiredFeatures;
+        return nullptr;
+    }
+
+    rhi::ICommandBuffer* FVulkanContext::AcquireImmediateCommandBuffer(EQueueFeatures RequiredFeatures)
+    {
+        assert(ImmediateCmdBufferManager != nullptr);
+        return ImmediateCmdBufferManager->Acquire(RequiredFeatures);
+    }
+
+    VkDevice FVulkanContext::GetDevice() const
+    {
+        return SelectedAdapter != nullptr ? SelectedAdapter->GetDevice() : VK_NULL_HANDLE;
+    }
+
+    bool FVulkanContext::AcquireImmediateCommandPool(EQueueFeatures RequiredFeatures, VkCommandPool& OutPool, uint32_t& OutQueueFamilyIndex, VkQueue& OutQueue, EQueueFeatures& OutQueueFeatures)
+    {
+        OutPool = VK_NULL_HANDLE;
+        OutQueueFamilyIndex = 0;
+        OutQueue = VK_NULL_HANDLE;
+        OutQueueFeatures = EQueueFeatures::None;
+
+        for (const FVkImmediatePoolEntry& poolEntry : ImmediatePools)
+        {
+            if ((poolEntry.QueueFeatures & RequiredFeatures) == RequiredFeatures)
+            {
+                OutPool = poolEntry.Pool;
+                OutQueueFamilyIndex = poolEntry.QueueFamilyIndex;
+                OutQueueFeatures = poolEntry.QueueFeatures;
+                vkGetDeviceQueue(GetDevice(), poolEntry.QueueFamilyIndex, 0, &OutQueue);
+                return OutPool != VK_NULL_HANDLE && OutQueue != VK_NULL_HANDLE;
+            }
+        }
+
+        if (!FindQueueFamilyForFeatures(RequiredFeatures, OutQueueFamilyIndex, OutQueueFeatures))
+        {
+            return false;
+        }
+
+        VkCommandPoolCreateInfo poolCreateInfo{};
+        poolCreateInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+        poolCreateInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+        poolCreateInfo.queueFamilyIndex = OutQueueFamilyIndex;
+
+        VK_CHECK_RESULT(vkCreateCommandPool(GetDevice(), &poolCreateInfo, nullptr, &OutPool));
+        vkGetDeviceQueue(GetDevice(), OutQueueFamilyIndex, 0, &OutQueue);
+
+        if (OutPool == VK_NULL_HANDLE || OutQueue == VK_NULL_HANDLE)
+        {
+            if (OutPool != VK_NULL_HANDLE)
+            {
+                vkDestroyCommandPool(GetDevice(), OutPool, nullptr);
+            }
+            OutPool = VK_NULL_HANDLE;
+            return false;
+        }
+
+        ImmediatePools.push_back(FVkImmediatePoolEntry{
+            .Pool = OutPool,
+            .QueueFamilyIndex = OutQueueFamilyIndex,
+            .QueueFeatures = OutQueueFeatures});
 
         return true;
     }
@@ -421,6 +498,16 @@ namespace rhi::vulkan
 
             if (SelectedAdapter)
             {
+                VkDevice device = SelectedAdapter->GetDevice();
+                for (const FVkImmediatePoolEntry& poolEntry : ImmediatePools)
+                {
+                    if (poolEntry.Pool != VK_NULL_HANDLE)
+                    {
+                        vkDestroyCommandPool(device, poolEntry.Pool, nullptr);
+                    }
+                }
+                ImmediatePools.clear();
+
                 delete SelectedAdapter;
                 SelectedAdapter = nullptr;
             }
@@ -428,5 +515,20 @@ namespace rhi::vulkan
             vkDestroyInstance(Instance, nullptr);
             Instance = VK_NULL_HANDLE;
         }
+    }
+
+    bool FVulkanContext::FindQueueFamilyForFeatures(EQueueFeatures RequiredFeatures, uint32_t& OutQueueFamilyIndex, EQueueFeatures& OutQueueFeatures) const
+    {
+        for (const FVkQueueFamilyInfo& queueFamilyInfo : ActiveQueueFamilyInfos)
+        {
+            if (queueFamilyInfo.SupportsFeatures(RequiredFeatures))
+            {
+                OutQueueFamilyIndex = queueFamilyInfo.FamilyIndex;
+                OutQueueFeatures = queueFamilyInfo.Type;
+                return true;
+            }
+        }
+
+        return false;
     }
 }

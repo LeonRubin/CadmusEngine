@@ -3,6 +3,9 @@
 #include "Defs.hpp"
 #include "Types.hpp"
 
+#include "Pipeline.hpp"
+#include "CommandBuffersPool.hpp"
+
 namespace rhi
 {
     enum ERHILogLevel
@@ -29,6 +32,10 @@ namespace rhi
         virtual ~IContext() = default;
 
         virtual bool Initialize(const FContextInitParams& Params) = 0;
+
+        virtual IPipelineBuilder* GetPipelineBuilder() = 0;
+        virtual ICommandBuffersPool* GetCommandBuffersPool(EQueueFeatures RequiredFeatures = EQueueFeatures::GRAPHICS) = 0;
+        virtual ICommandBuffer* AcquireImmediateCommandBuffer(EQueueFeatures RequiredFeatures = EQueueFeatures::GRAPHICS) = 0;
     };
 
     typedef IContext* (*PFN_CreateRHIContext)();

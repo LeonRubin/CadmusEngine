@@ -102,6 +102,18 @@ void Init()
 #endif
 
                 gRHIContext->Initialize(initParams);
+
+                auto pipelineBuilder = gRHIContext->GetPipelineBuilder();
+
+                pipelineBuilder->SetType(rhi::EPipelineType::Graphics)
+                    .SetShaderStage(rhi::EShaderStage::Vertex, "main", "Content/Shaders/helloTriangle.vert.glsl")
+                    .SetShaderStage(rhi::EShaderStage::Fragment, "main", "Content/Shaders/helloTriangle.frag.glsl")
+                    .SetOutput(0, rhi::EColorFormat::BGRA8_UNorm)
+                    .SetRasterizationState({.CullMode = rhi::ECullMode::Back})
+                    .SetType(rhi::EPipelineType::Graphics);
+
+                auto pipeline = pipelineBuilder->Build();
+
             }
         }
     }

@@ -1,13 +1,16 @@
 #pragma once
 
+#include <algorithm>
+#include <array>
 #include <cstddef>
+#include <initializer_list>
+#include <vector>
 
 #include "Defs.hpp"
 #include "Types.hpp"
 
 namespace rhi
 {
-    class IPipeline;
 
     struct CADMUS_RHI_API FColorBlendAttachmentStateDesc
     {
@@ -23,9 +26,32 @@ namespace rhi
 
     struct CADMUS_RHI_API FColorBlendStateDesc
     {
-        const FColorBlendAttachmentStateDesc* Attachments{nullptr};
-        size_t AttachmentCount{0};
         float BlendConstants[4]{0.0f, 0.0f, 0.0f, 0.0f};
+        std::vector<FColorBlendAttachmentStateDesc> Attachments;
+
+        FColorBlendStateDesc() = default;
+
+        FColorBlendStateDesc(std::initializer_list<float> InBlendConstants,
+                             std::initializer_list<FColorBlendAttachmentStateDesc> InAttachments)
+            : Attachments(InAttachments)
+        {
+            const size_t count = std::min(InBlendConstants.size(), static_cast<size_t>(4));
+            auto sourceIt = InBlendConstants.begin();
+            for (size_t i = 0; i < count; ++i, ++sourceIt)
+            {
+                BlendConstants[i] = *sourceIt;
+            }
+        }
+
+        FColorBlendStateDesc(const std::array<float, 4>& InBlendConstants,
+                             std::initializer_list<FColorBlendAttachmentStateDesc> InAttachments)
+            : Attachments(InAttachments)
+        {
+            for (size_t i = 0; i < 4; ++i)
+            {
+                BlendConstants[i] = InBlendConstants[i];
+            }
+        }
     };
 
     enum class EDynamicState : uint8_t
@@ -45,23 +71,6 @@ namespace rhi
     {
         Vertex = 0,
         Instance = 1
-    };
-
-    enum class EVertexFormat : uint8_t
-    {
-        Float = 0,
-        Float2 = 1,
-        Float3 = 2,
-        Float4 = 3,
-        UInt = 4,
-        UInt2 = 5,
-        UInt3 = 6,
-        UInt4 = 7,
-        SInt = 8,
-        SInt2 = 9,
-        SInt3 = 10,
-        SInt4 = 11,
-        UByte4Norm = 12
     };
 
     struct CADMUS_RHI_API FVertexInputBindingDesc
@@ -95,11 +104,11 @@ namespace rhi
         virtual EPipelineType GetType() const = 0;
     };
 
+    // Deferred builder for graphics/compute pipelines. Performs compilation/creation on Build.
     class CADMUS_RHI_API IPipelineBuilder
     {
     public:
         virtual ~IPipelineBuilder() = default;
-        IPipelineBuilder() = default;
 
         virtual IPipelineBuilder& SetType(EPipelineType Type) = 0;
         virtual IPipelineBuilder& SetShaderStage(EShaderStage ShaderStage, const char* EntrypointName, const char* ShaderPath) = 0;
@@ -111,6 +120,9 @@ namespace rhi
         virtual IPipelineBuilder& SetMultisampleState(const FMultisampleStateDesc& Desc) = 0;
         virtual IPipelineBuilder& SetDepthStencilState(const FDepthStencilStateDesc& Desc) = 0;
         virtual IPipelineBuilder& SetColorBlendState(const FColorBlendStateDesc& Desc) = 0;
+        virtual IPipelineBuilder& SetOutput(size_t Index, EColorFormat Format) = 0;
+        virtual IPipelineBuilder& SetDepthOutput(EDepthStencilFormat Format) = 0;
+        virtual IPipelineBuilder& SetStencilOutput(EDepthStencilFormat Format) = 0;
         virtual IPipelineBuilder& SetDynamicState(const EDynamicState* DynamicStates, size_t DynamicStateCount) = 0;
         virtual IPipelineBuilder& SetVertexInputState(const FVertexInputStateDesc& Desc) = 0;
         virtual IPipelineBuilder& Reset() = 0;

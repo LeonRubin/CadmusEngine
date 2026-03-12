@@ -6,13 +6,31 @@ if(NOT Vulkan_FOUND)
 	message(FATAL_ERROR "Vulkan SDK not found. Please install the Vulkan SDK and ensure VULKAN_SDK is set.")
 endif()
 
+find_package(shaderc CONFIG QUIET)
+find_package(unofficial-shaderc CONFIG QUIET)
+
 add_library(CadmusRHI_Vulkan SHARED)
 add_library(Cadmus::RHI::Vulkan ALIAS CadmusRHI_Vulkan)
 set_property(GLOBAL APPEND PROPERTY CADMUS_RHI_BACKEND_TARGETS CadmusRHI_Vulkan)
 
-file(GLOB CADMUS_VULKAN_SOURCES CONFIGURE_DEPENDS
+set(CADMUS_SHADERC_TARGET "")
+if(TARGET shaderc::shaderc)
+	set(CADMUS_SHADERC_TARGET shaderc::shaderc)
+elseif(TARGET shaderc_combined)
+	set(CADMUS_SHADERC_TARGET shaderc_combined)
+elseif(TARGET shaderc::shaderc_combined)
+	set(CADMUS_SHADERC_TARGET shaderc::shaderc_combined)
+elseif(TARGET unofficial::shaderc::shaderc)
+	set(CADMUS_SHADERC_TARGET unofficial::shaderc::shaderc)
+endif()
+
+if(CADMUS_SHADERC_TARGET STREQUAL "")
+	message(FATAL_ERROR "shaderc target not found. Ensure vcpkg dependency 'shaderc' is installed and toolchain is configured.")
+endif()
+
+file(GLOB_RECURSE CADMUS_VULKAN_SOURCES CONFIGURE_DEPENDS
 	${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp)
-file(GLOB CADMUS_VULKAN_HEADERS CONFIGURE_DEPENDS
+file(GLOB_RECURSE CADMUS_VULKAN_HEADERS CONFIGURE_DEPENDS
 	${CMAKE_CURRENT_SOURCE_DIR}/src/*.hpp)
 
 target_sources(CadmusRHI_Vulkan
@@ -27,6 +45,7 @@ target_link_libraries(CadmusRHI_Vulkan
 		Cadmus::RHI
 	PRIVATE
 		Vulkan::Vulkan
+		${CADMUS_SHADERC_TARGET}
 		project_warnings
 		project_sanitizers)
 
