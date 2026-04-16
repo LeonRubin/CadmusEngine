@@ -147,6 +147,8 @@ namespace rhi
                 return VK_FORMAT_R8G8B8A8_UNORM;
             case EColorFormat::BGRA8_UNorm:
                 return VK_FORMAT_B8G8R8A8_UNORM;
+            case EColorFormat::BGRA8_SRGB:
+                return VK_FORMAT_B8G8R8A8_SRGB;
             default:
                 return VK_FORMAT_UNDEFINED;
             }
@@ -738,9 +740,17 @@ namespace rhi
             VkPipelineViewportStateCreateInfo DefaultViewportState{};
             DefaultViewportState.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
             DefaultViewportState.viewportCount = 1;
-            DefaultViewportState.pViewports = &DefaultViewport;
             DefaultViewportState.scissorCount = 1;
-            DefaultViewportState.pScissors = &DefaultScissor;
+            DefaultViewportState.pViewports = nullptr;
+            DefaultViewportState.pScissors = nullptr;
+
+            VkDynamicState DefaultDynamicStates[] = {
+                VK_DYNAMIC_STATE_VIEWPORT,
+                VK_DYNAMIC_STATE_SCISSOR};
+            VkPipelineDynamicStateCreateInfo DefaultDynamicState{};
+            DefaultDynamicState.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+            DefaultDynamicState.dynamicStateCount = 2;
+            DefaultDynamicState.pDynamicStates = DefaultDynamicStates;
 
             VkSampleMask DefaultSampleMask = 0xFFFFFFFFu;
             VkPipelineMultisampleStateCreateInfo DefaultMultisampleState{};
@@ -777,7 +787,7 @@ namespace rhi
             GraphicsCreateInfo.pMultisampleState = MultisampleState ? &(*MultisampleState) : &DefaultMultisampleState;
             GraphicsCreateInfo.pDepthStencilState = DepthStencilState ? &(*DepthStencilState) : nullptr;
             GraphicsCreateInfo.pColorBlendState = ColorBlendState ? &(*ColorBlendState) : &DefaultColorBlendState;
-            GraphicsCreateInfo.pDynamicState = DynamicState ? &(*DynamicState) : nullptr;
+            GraphicsCreateInfo.pDynamicState = DynamicState ? &(*DynamicState) : &DefaultDynamicState;
             GraphicsCreateInfo.layout = pipelineLayout;
 
             const uint32_t RenderingColorAttachmentCount = GraphicsCreateInfo.pColorBlendState ? GraphicsCreateInfo.pColorBlendState->attachmentCount : 0;

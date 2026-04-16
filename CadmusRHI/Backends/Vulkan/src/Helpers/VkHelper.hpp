@@ -80,13 +80,87 @@ namespace rhi::vulkan
     {
         switch (format)
         {
+        case VK_FORMAT_B8G8R8A8_UNORM:
         case VK_FORMAT_B8G8R8A8_SRGB:
             return EColorFormat::BGRA8_UNorm;
+        case VK_FORMAT_R8G8B8A8_UNORM:
         case VK_FORMAT_R8G8B8A8_SRGB:
             return EColorFormat::RGBA8_UNorm;
         default:
             return EColorFormat::Unknown;
         }
+    }
+
+    inline VkFormat ConvertColorFormat(EColorFormat format)
+    {
+        switch (format)
+        {
+        case EColorFormat::RGBA8_UNorm:
+            return VK_FORMAT_R8G8B8A8_UNORM;
+        case EColorFormat::BGRA8_UNorm:
+            return VK_FORMAT_B8G8R8A8_UNORM;
+        default:
+            return VK_FORMAT_UNDEFINED;
+        }
+    }
+
+    inline VkImageType ConvertImageType(ETextureType type)
+    {
+        switch (type)
+        {
+        case ETextureType::Texture2D:
+            return VK_IMAGE_TYPE_2D;
+        case ETextureType::Texture3D:
+            return VK_IMAGE_TYPE_3D;
+        default:
+            return VK_IMAGE_TYPE_2D;
+        }
+    }
+
+    inline VkImageViewType ConvertImageViewType(ETextureType type)
+    {
+        switch (type)
+        {
+        case ETextureType::Texture2D:
+            return VK_IMAGE_VIEW_TYPE_2D;
+        case ETextureType::Texture3D:
+            return VK_IMAGE_VIEW_TYPE_3D;
+        default:
+            return VK_IMAGE_VIEW_TYPE_2D;
+        }
+    }
+
+    inline VkImageUsageFlags ConvertTextureUsageFlags(ETextureUsageFlags usage)
+    {
+        VkImageUsageFlags usageFlags = 0;
+        const uint32_t usageBits = static_cast<uint32_t>(usage);
+
+        if ((usageBits & static_cast<uint32_t>(ETextureUsageFlags::Sampled)) != 0)
+        {
+            usageFlags |= VK_IMAGE_USAGE_SAMPLED_BIT;
+        }
+        if ((usageBits & static_cast<uint32_t>(ETextureUsageFlags::Storage)) != 0)
+        {
+            usageFlags |= VK_IMAGE_USAGE_STORAGE_BIT;
+        }
+        if ((usageBits & static_cast<uint32_t>(ETextureUsageFlags::ColorAttachment)) != 0)
+        {
+            usageFlags |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+        }
+        if ((usageBits & static_cast<uint32_t>(ETextureUsageFlags::DepthStencilAttachment)) != 0)
+        {
+            usageFlags |= VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+        }
+        if ((usageBits & static_cast<uint32_t>(ETextureUsageFlags::TransferSrc)) != 0)
+        {
+            usageFlags |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+        }
+        if ((usageBits & static_cast<uint32_t>(ETextureUsageFlags::TransferDst)) != 0)
+        {
+            usageFlags |= VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+        }
+
+        return usageFlags;
     }
 
     inline rhi::EQueueFeatures QueueTypeFromVkFlags(VkQueueFlags Flags)
@@ -451,6 +525,11 @@ namespace rhi::vulkan
     {
         for (const auto &availableFormat : availableFormats)
         {
+            if (availableFormat.format == VK_FORMAT_B8G8R8A8_UNORM && availableFormat.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR)
+            {
+                return availableFormat;
+            }
+
             if (availableFormat.format == VK_FORMAT_B8G8R8A8_SRGB && availableFormat.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR)
             {
                 return availableFormat;

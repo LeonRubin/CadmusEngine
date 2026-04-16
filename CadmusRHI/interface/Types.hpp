@@ -1,9 +1,36 @@
 #pragma once
 
 #include <cstdint>
+#include <type_traits>
 
 #include "Defs.hpp"
 #include "BitmaskTemplates.hpp"
+
+#define INVALID_U64 0xFFFFFFFFFFFFFFFFull
+#define INVALID_U32 0xFFFFFFFFu
+
+typedef unsigned long long u64;
+typedef unsigned int u32;
+
+static_assert(sizeof(u64) == 8, "u64 must be 8 bytes");
+static_assert(sizeof(u32) == 4, "u32 must be 4 bytes");
+
+template<typename T>
+struct THandle
+{
+    u32 Index;
+    u32 Generation;
+};
+
+template<typename TTo, typename TFrom>
+constexpr THandle<TTo> RebindHandle(const THandle<TFrom>& h) noexcept
+{
+    static_assert(std::is_trivially_copyable_v<THandle<TFrom>>);
+    static_assert(std::is_trivially_copyable_v<THandle<TTo>>);
+    static_assert(sizeof(THandle<TFrom>) == sizeof(THandle<TTo>));
+    return THandle<TTo>{h.Index, h.Generation};
+}
+
 namespace rhi
 {
     enum class EQueueFeatures : uint32_t
@@ -38,11 +65,45 @@ namespace rhi
         }
     };
 
+    struct FExtent3D
+    {
+        uint32_t Width{0};
+        uint32_t Height{0};
+        uint32_t Depth{0};
+
+        constexpr FExtent3D() = default;
+        constexpr FExtent3D(uint32_t InWidth, uint32_t InHeight, uint32_t InDepth)
+            : Width(InWidth)
+            , Height(InHeight)
+            , Depth(InDepth)
+        {
+        }
+    };
+
+        enum class ETextureType : uint8_t
+    {
+        Texture2D = 0,
+        Texture3D = 1,
+    };
+
+    enum class ETextureUsageFlags : uint32_t
+    {
+        None = 0u,
+        Sampled = 1u << 0,
+        Storage = 1u << 1,
+        ColorAttachment = 1u << 2,
+        DepthStencilAttachment = 1u << 3,
+        TransferSrc = 1u << 4,
+        TransferDst = 1u << 5,
+    };
+    consteval void enable_bitmask_operators(ETextureUsageFlags);
+
     enum class EColorFormat
     {
         Unknown,
         RGBA8_UNorm,
-        BGRA8_UNorm
+        BGRA8_UNorm,
+        BGRA8_SRGB
     };
 
     enum class EDepthStencilFormat
@@ -307,11 +368,14 @@ namespace rhi
 
     };
 
+    class ITexture;
     // Rethink to be fillable via functions instead of direct filling? (heavily inspired by LVK)
-    struct CADMUS_RHI_API FDynamicRenderPass final
+    struct CADMUS_RHI_API FRenderPassDesc final
     {
         struct RenderTarget
         {
+            THandle<ITexture> TextureHandle;
+
             ELoadOp LoadOp{ELoadOp::Load};
             EStoreOp StoreOp{EStoreOp::Store};
             EColorFormat Format{EColorFormat::Unknown};
@@ -331,6 +395,9 @@ namespace rhi
 
         uint32_t layerCount{1};
         uint32_t viewMask{0xFFFFFFFFu}; // For multiview rendering, specifies which views to render to. Each bit corresponds to a view index.
+
+        FExtent2D RenderAreaExtent{0, 0}; // Optional override for render area size. If zero, the size of the attachments will be used.
+        FExtent2D RenderAreaOffset{0, 0}; // Optional offset for the render area. Ignored if RenderAreaExtent is zero.
 
         FORCE_INLINE int GetColorAttachmentCount() const
         {

@@ -4,6 +4,8 @@
 #include "Types.hpp"
 
 #include "Pipeline.hpp"
+#include "Resources/Texture.hpp"
+
 #include "CommandBuffersPool.hpp"
 
 namespace rhi
@@ -36,6 +38,10 @@ namespace rhi
         virtual IPipelineBuilder* GetPipelineBuilder() = 0;
         virtual ICommandBuffersPool* GetCommandBuffersPool(EQueueFeatures RequiredFeatures = EQueueFeatures::GRAPHICS) = 0;
         virtual ICommandBuffer* AcquireImmediateCommandBuffer(EQueueFeatures RequiredFeatures = EQueueFeatures::GRAPHICS) = 0;
+        virtual void SubmitCmdBufferImmediate(const ICommandBuffer* pCommandBuffers, size_t CommandBufferCount = 1, bool bSyncWithPreviousSubmits = true) = 0;
+        virtual bool Present(bool bSyncWithPreviousSubmits = true) = 0;
+        virtual THandle<ITexture> CreateTexture(const FTextureCreateInfo& CreateInfo) = 0;
+        virtual THandle<ITexture> GetCurrentSwapchainTexture() = 0;
     };
 
     typedef IContext* (*PFN_CreateRHIContext)();

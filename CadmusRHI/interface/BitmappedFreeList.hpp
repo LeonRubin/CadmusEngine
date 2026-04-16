@@ -6,32 +6,26 @@
 // (Optional) Make it async safe
 
 #include "Defs.hpp"
+#include "Types.hpp"
+
 #include <algorithm>
 #include <bit>
 #include <cstring>
-
-#define INVALID_U64 0xFFFFFFFFFFFFFFFFull
-#define INVALID_U32 0xFFFFFFFFu
-
-typedef unsigned long long u64;
-typedef unsigned int u32;
-
-static_assert(sizeof(u64) == 8, "u64 must be 8 bytes");
-static_assert(sizeof(u32) == 4, "u32 must be 4 bytes");
-
-struct FFreeListHandle
-{
-    u32 Index;
-    u32 Generation;
-};
+#include <memory>
+#include <new>
+#include <type_traits>
+#include <utility>
 
 // 2-level Bitmap Free List
 template<typename T>
-class BitmappedFreeList
+class THandleVector
 {
+    static_assert(std::is_move_constructible_v<T>, "THandleVector requires T to be move constructible.");
+    static_assert(std::is_nothrow_move_constructible_v<T>, "THandleVector requires T to be nothrow move constructible for safe reallocation.");
+
 private:
 
-    T* Elements = nullptr;
+    std::byte* Elements = nullptr;
     u32* Generations = nullptr; 
 
     u64* L0Bitmaps = nullptr; // Lowest level bitmaps, each bit represents a slot
@@ -43,18 +37,52 @@ private:
     size_t Capacity = 0;
     size_t Count = 0;
 private:
+    T* GetElementPtr(size_t Index)
+    {
+        return std::launder(reinterpret_cast<T*>(Elements + (Index * sizeof(T))));
+    }
+
+    const T* GetElementPtr(size_t Index) const
+    {
+        return std::launder(reinterpret_cast<const T*>(Elements + (Index * sizeof(T))));
+    }
+
+    template<typename Func>
+    void ForEachUsedSlot(Func&& Visitor)
+    {
+        for(size_t l0Idx = 0; l0Idx < L0BitmapCount; ++l0Idx)
+        {
+            u64 mask = L0Bitmaps[l0Idx];
+            while(mask != 0)
+            {
+                const size_t bit = std::countr_zero(mask);
+                const size_t idx = (l0Idx * 64) + bit;
+                Visitor(idx);
+                mask &= (mask - 1); // clear least significant set bit
+            }
+        }
+    }
 
 
 public:
 
-    BitmappedFreeList(size_t InitialCapacity = 1024)
+    THandleVector(size_t InitialCapacity = 1024)
     {
         Reserve(InitialCapacity);
     };
 
-    ~BitmappedFreeList()
+    ~THandleVector()
     {
-        delete[] Elements;
+        if(Elements)
+        {
+            ForEachUsedSlot([this](size_t idx)
+            {
+                std::destroy_at(GetElementPtr(idx));
+            });
+
+            ::operator delete[](Elements, std::align_val_t(alignof(T)));
+        }
+
         delete[] Generations;
         delete[] L0Bitmaps;
         delete[] L1Bitmaps;
@@ -71,7 +99,7 @@ public:
 
             const size_t NewL0BitmapCount = NewCapacity / 64;
 
-            T* NewElements = new T[NewCapacity];
+            std::byte* NewElements = static_cast<std::byte*>(::operator new[](NewCapacity * sizeof(T), std::align_val_t(alignof(T))));
             u32* NewGenerations = new u32[NewCapacity];
 
             u64* NewL0Bitmaps = new u64[NewL0BitmapCount];
@@ -84,8 +112,16 @@ public:
             // Copy old data
             if(Elements)
             {
-                std::copy(Elements, Elements + Capacity, NewElements);
-                delete[] Elements;
+                ForEachUsedSlot([this, NewElements](size_t idx)
+                {
+                    T* OldElement = GetElementPtr(idx);
+                    T* NewElement = std::launder(reinterpret_cast<T*>(NewElements + (idx * sizeof(T))));
+
+                    std::construct_at(NewElement, std::move(*OldElement));
+                    std::destroy_at(OldElement);
+                });
+
+                ::operator delete[](Elements, std::align_val_t(alignof(T)));
             }
 
             if(Generations)
@@ -117,23 +153,25 @@ public:
         }
     };
 
-    T* Get(FFreeListHandle& Handle)
+    T* Get(const THandle<T>& Handle)
     {
         if(Handle.Index < Capacity && Generations[Handle.Index] == Handle.Generation)
         {
-            return &Elements[Handle.Index];
+            return GetElementPtr(Handle.Index);
         }else
         {
             return nullptr;
         }
     };
 
-    void ReleaseHandle(FFreeListHandle& Handle)
+    void ReleaseHandle(THandle<T>& Handle)
     {
-        if(Handle.Index < Capacity)
+        if(Handle.Index < Capacity && Generations[Handle.Index] == Handle.Generation)
         {
             size_t l0Idx = Handle.Index / 64;
             size_t bitIdx = Handle.Index % 64;
+
+            std::destroy_at(GetElementPtr(Handle.Index));
 
             // Mark the slot as free
             L0Bitmaps[l0Idx] &= ~(1ull << bitIdx);
@@ -148,7 +186,25 @@ public:
         }
     };
 
-    void AllocateHandle(FFreeListHandle& OutHandle)
+    void Clear()
+    {
+        if (!Elements)
+        {
+            return;
+        }
+
+        ForEachUsedSlot([this](size_t idx)
+        {
+            std::destroy_at(GetElementPtr(idx));
+        });
+
+        std::memset(L0Bitmaps, 0, L0BitmapCount * sizeof(u64));
+        std::memset(L1Bitmaps, 0, L1BitmapCount * sizeof(u64));
+        Count = 0;
+    }
+
+    template<typename... TArgs>
+    void AllocateHandle(THandle<T>& OutHandle, TArgs&&... Args)
     {
         for(size_t l1Idx = 0; l1Idx < L1BitmapCount; ++l1Idx)
         {
@@ -166,6 +222,8 @@ public:
                     L1Bitmaps[l1Idx] |= (1ull << (l0Idx % 64));
                 }
 
+                std::construct_at(GetElementPtr(freeIdx), std::forward<TArgs>(Args)...);
+
                 Generations[freeIdx]++; // Increment generation to invalidate old handles
                 OutHandle.Index = static_cast<u32>(freeIdx);
                 OutHandle.Generation = Generations[freeIdx];
@@ -175,8 +233,14 @@ public:
 
         // No free slots, need to grow
         Reserve(Capacity * 2);
-        return AllocateHandle(OutHandle);
+        return AllocateHandle(OutHandle, std::forward<TArgs>(Args)...);
     };
+
+    void AllocateHandle(THandle<T>& OutHandle)
+        requires std::default_initializable<T>
+    {
+        AllocateHandle<>(OutHandle);
+    }
 
     bool ValidateInvariants() const
     {
@@ -196,7 +260,7 @@ public:
         return true;
     }
 
-    size_t GetCapacityForTests() const
+    size_t GetCapacity() const
     {
         return Capacity;
     }

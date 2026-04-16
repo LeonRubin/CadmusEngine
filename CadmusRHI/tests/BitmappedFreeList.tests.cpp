@@ -8,17 +8,17 @@
 
 #include "BitmappedFreeList.hpp"
 
-TEST(BitmappedFreeList, AllocReleaseValidity)
+TEST(THandleVector, AllocReleaseValidity)
 {
-    BitmappedFreeList<int> freeList(4096);
+    THandleVector<int> freeList(4096);
 
-    std::vector<FFreeListHandle> handles;
+    std::vector<THandle<int>> handles;
     handles.reserve(1024);
     std::unordered_set<u32> usedIndices;
 
     for(size_t i = 0; i < 1024; ++i)
     {
-        FFreeListHandle handle{};
+        THandle<int> handle{};
         freeList.AllocateHandle(handle);
 
         EXPECT_TRUE(usedIndices.insert(handle.Index).second);
@@ -34,7 +34,7 @@ TEST(BitmappedFreeList, AllocReleaseValidity)
 
     for(size_t i = 0; i < handles.size(); i += 2)
     {
-        FFreeListHandle staleHandle = handles[i];
+        THandle<int> staleHandle = handles[i];
         freeList.ReleaseHandle(handles[i]);
 
         EXPECT_EQ(freeList.Get(staleHandle), nullptr);
@@ -45,7 +45,7 @@ TEST(BitmappedFreeList, AllocReleaseValidity)
 
     for(size_t i = 0; i < 512; ++i)
     {
-        FFreeListHandle handle{};
+        THandle<int> handle{};
         freeList.AllocateHandle(handle);
 
         EXPECT_TRUE(usedIndices.insert(handle.Index).second);
@@ -55,14 +55,14 @@ TEST(BitmappedFreeList, AllocReleaseValidity)
     EXPECT_TRUE(freeList.ValidateInvariants());
 }
 
-TEST(BitmappedFreeList, RandomizedAllocFreeAlwaysValid)
+TEST(THandleVector, RandomizedAllocFreeAlwaysValid)
 {
-    BitmappedFreeList<int> freeList(4096);
+    THandleVector<int> freeList(4096);
 
     std::mt19937 rng(42u);
     std::bernoulli_distribution allocateDist(0.6);
 
-    std::vector<FFreeListHandle> activeHandles;
+    std::vector<THandle<int>> activeHandles;
     activeHandles.reserve(4096);
     std::unordered_set<u32> activeIndices;
 
@@ -75,7 +75,7 @@ TEST(BitmappedFreeList, RandomizedAllocFreeAlwaysValid)
 
         if(shouldAllocate)
         {
-            FFreeListHandle handle{};
+            THandle<int> handle{};
             freeList.AllocateHandle(handle);
 
             EXPECT_TRUE(activeIndices.insert(handle.Index).second);
@@ -87,7 +87,7 @@ TEST(BitmappedFreeList, RandomizedAllocFreeAlwaysValid)
             std::uniform_int_distribution<size_t> releaseIdxDist(0, activeHandles.size() - 1);
             const size_t idx = releaseIdxDist(rng);
 
-            FFreeListHandle staleHandle = activeHandles[idx];
+            THandle<int> staleHandle = activeHandles[idx];
             freeList.ReleaseHandle(activeHandles[idx]);
 
             EXPECT_EQ(freeList.Get(staleHandle), nullptr);
@@ -103,7 +103,7 @@ TEST(BitmappedFreeList, RandomizedAllocFreeAlwaysValid)
         }
     }
 
-    for(FFreeListHandle& handle : activeHandles)
+    for(THandle<int>& handle : activeHandles)
     {
         freeList.ReleaseHandle(handle);
     }
@@ -111,24 +111,24 @@ TEST(BitmappedFreeList, RandomizedAllocFreeAlwaysValid)
     EXPECT_TRUE(freeList.ValidateInvariants());
 }
 
-TEST(BitmappedFreeList, CapacityRoundsToBitmapHierarchy)
+TEST(THandleVector, CapacityRoundsToBitmapHierarchy)
 {
-    BitmappedFreeList<int> freeList(1);
-    EXPECT_EQ(freeList.GetCapacityForTests(), 4096u);
+    THandleVector<int> freeList(1);
+    EXPECT_EQ(freeList.GetCapacity(), 4096u);
 
     freeList.Reserve(5000);
-    EXPECT_EQ(freeList.GetCapacityForTests(), 8192u);
+    EXPECT_EQ(freeList.GetCapacity(), 8192u);
 
     EXPECT_TRUE(freeList.ValidateInvariants());
 }
 
-TEST(BitmappedFreeList, StaleHandleInvalidAfterReleaseAndReuse)
+TEST(THandleVector, StaleHandleInvalidAfterReleaseAndReuse)
 {
-    BitmappedFreeList<int> freeList(64);
+    THandleVector<int> freeList(64);
 
-    FFreeListHandle first{};
+    THandle<int> first{};
     freeList.AllocateHandle(first);
-    FFreeListHandle stale = first;
+    THandle<int> stale = first;
 
     ASSERT_NE(freeList.Get(first), nullptr);
     freeList.ReleaseHandle(first);
@@ -137,7 +137,7 @@ TEST(BitmappedFreeList, StaleHandleInvalidAfterReleaseAndReuse)
     EXPECT_EQ(first.Generation, INVALID_U32);
     EXPECT_EQ(freeList.Get(stale), nullptr);
 
-    FFreeListHandle second{};
+    THandle<int> second{};
     freeList.AllocateHandle(second);
 
     EXPECT_EQ(second.Index, stale.Index);
@@ -147,17 +147,17 @@ TEST(BitmappedFreeList, StaleHandleInvalidAfterReleaseAndReuse)
     EXPECT_TRUE(freeList.ValidateInvariants());
 }
 
-TEST(BitmappedFreeList, InvalidHandleReturnsNull)
+TEST(THandleVector, InvalidHandleReturnsNull)
 {
-    BitmappedFreeList<int> freeList(128);
+    THandleVector<int> freeList(128);
 
-    FFreeListHandle invalidIndex{INVALID_U32, 0};
+    THandle<int> invalidIndex{INVALID_U32, 0};
     EXPECT_EQ(freeList.Get(invalidIndex), nullptr);
 
-    FFreeListHandle handle{};
+    THandle<int> handle{};
     freeList.AllocateHandle(handle);
 
-    FFreeListHandle wrongGeneration = handle;
+    THandle<int> wrongGeneration = handle;
     wrongGeneration.Generation += 1;
     EXPECT_EQ(freeList.Get(wrongGeneration), nullptr);
 
@@ -165,11 +165,11 @@ TEST(BitmappedFreeList, InvalidHandleReturnsNull)
     EXPECT_TRUE(freeList.ValidateInvariants());
 }
 
-TEST(BitmappedFreeList, DoubleReleaseOfSameHandleIsSafe)
+TEST(THandleVector, DoubleReleaseOfSameHandleIsSafe)
 {
-    BitmappedFreeList<int> freeList(256);
+    THandleVector<int> freeList(256);
 
-    FFreeListHandle handle{};
+    THandle<int> handle{};
     freeList.AllocateHandle(handle);
     freeList.ReleaseHandle(handle);
     freeList.ReleaseHandle(handle);
@@ -179,47 +179,47 @@ TEST(BitmappedFreeList, DoubleReleaseOfSameHandleIsSafe)
     EXPECT_TRUE(freeList.ValidateInvariants());
 }
 
-TEST(BitmappedFreeList, GrowsWithoutDuplicateIndicesOnInitialAllocation)
+TEST(THandleVector, GrowsWithoutDuplicateIndicesOnInitialAllocation)
 {
-    BitmappedFreeList<int> freeList(64);
-    const size_t initialCapacity = freeList.GetCapacityForTests();
+    THandleVector<int> freeList(64);
+    const size_t initialCapacity = freeList.GetCapacity();
 
-    std::vector<FFreeListHandle> handles;
+    std::vector<THandle<int>> handles;
     handles.reserve(initialCapacity + 1);
     std::unordered_set<u32> indices;
     indices.reserve(initialCapacity + 1);
 
     for(size_t i = 0; i < initialCapacity + 1; ++i)
     {
-        FFreeListHandle handle{};
+        THandle<int> handle{};
         freeList.AllocateHandle(handle);
         EXPECT_TRUE(indices.insert(handle.Index).second);
         EXPECT_NE(freeList.Get(handle), nullptr);
         handles.push_back(handle);
     }
 
-    EXPECT_GT(freeList.GetCapacityForTests(), initialCapacity);
+    EXPECT_GT(freeList.GetCapacity(), initialCapacity);
     EXPECT_TRUE(freeList.ValidateInvariants());
 }
 
 TEST(BitmappedFreeListPerf, AllocateReleaseThroughput)
 {
     constexpr size_t kOps = 300000;
-    BitmappedFreeList<int> freeList(kOps);
+    THandleVector<int> freeList(kOps);
 
-    std::vector<FFreeListHandle> handles;
+    std::vector<THandle<int>> handles;
     handles.reserve(kOps);
 
     const auto start = std::chrono::high_resolution_clock::now();
 
     for(size_t i = 0; i < kOps; ++i)
     {
-        FFreeListHandle handle{};
+        THandle<int> handle{};
         freeList.AllocateHandle(handle);
         handles.push_back(handle);
     }
 
-    for(FFreeListHandle& handle : handles)
+    for(THandle<int>& handle : handles)
     {
         freeList.ReleaseHandle(handle);
     }

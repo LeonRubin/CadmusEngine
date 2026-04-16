@@ -6,6 +6,7 @@ namespace rhi::vulkan
 {
     VkSwapchain::VkSwapchain(VkDevice InDevice, VkPhysicalDevice InPhysicalDevice, VkSurfaceKHR InSurface)
     {
+        Device = InDevice;
         FSwapchainSupportDetails swapchainSupport = QuerySwapchainSupport(InPhysicalDevice, InSurface);
         VkSurfaceFormatKHR surfaceFormat = ChooseSwapSurfaceFormat(swapchainSupport.Formats);
         VkPresentModeKHR presentMode = VK_PRESENT_MODE_FIFO_KHR;
@@ -41,13 +42,29 @@ namespace rhi::vulkan
 
         VK_CHECK_RESULT(vkCreateSwapchainKHR(InDevice, &swapchainCreateInfo, nullptr, &Swapchain));
 
-        vkGetSwapchainImagesKHR(InDevice, Swapchain, reinterpret_cast<uint32_t *>(&Desc.BufferCount), nullptr);
+        uint32_t imageCount = Desc.BufferCount;
+        VK_CHECK_RESULT(vkGetSwapchainImagesKHR(InDevice, Swapchain, &imageCount, nullptr));
+        if (imageCount == 0)
+        {
+            LogRHI(rhi::RHI_LOGLEVEL_ERROR, "vkGetSwapchainImagesKHR returned zero swapchain images.");
+            Desc.BufferCount = 0;
+            return;
+        }
+
+        Desc.BufferCount = imageCount;
         SwapChainImages.resize(Desc.BufferCount);
-        vkGetSwapchainImagesKHR(InDevice, Swapchain, reinterpret_cast<uint32_t *>(&Desc.BufferCount), SwapChainImages.data());
+        VK_CHECK_RESULT(vkGetSwapchainImagesKHR(InDevice, Swapchain, &imageCount, SwapChainImages.data()));
+        Desc.BufferCount = imageCount;
         
         SwapChainImageViews.resize(Desc.BufferCount);
         for (size_t i = 0; i < Desc.BufferCount; i++)
         {
+            if (SwapChainImages[i] == VK_NULL_HANDLE)
+            {
+                LogRHI(rhi::RHI_LOGLEVEL_ERROR, "Swapchain image handle is null.");
+                continue;
+            }
+
             VkImageViewCreateInfo viewCreateInfo{};
             viewCreateInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
             viewCreateInfo.image = SwapChainImages[i];
@@ -65,22 +82,91 @@ namespace rhi::vulkan
 
             VK_CHECK_RESULT(vkCreateImageView(InDevice, &viewCreateInfo, nullptr, &SwapChainImageViews[i]));
         }
+
+        const FTextureCreateInfo swapchainTextureCreateInfo = FTextureCreateInfo::Texture2D(
+            Desc.Format,
+            Desc.Extent,
+            1,
+            1,
+            1,
+            ETextureUsageFlags::ColorAttachment | ETextureUsageFlags::Sampled);
+
+        SwapchainTextures.reserve(Desc.BufferCount);
+        for (size_t i = 0; i < Desc.BufferCount; ++i)
+        {
+            if (SwapChainImages[i] == VK_NULL_HANDLE || SwapChainImageViews[i] == VK_NULL_HANDLE)
+            {
+                LogRHI(rhi::RHI_LOGLEVEL_ERROR, "Skipping invalid swapchain image while creating texture wrappers.");
+                continue;
+            }
+
+            SwapchainTextures.emplace_back(
+                Device,
+                SwapChainImages[i],
+                SwapChainImageViews[i],
+                swapchainTextureCreateInfo,
+                false,
+                false);
+        }
+
+        Desc.BufferCount = static_cast<uint32_t>(SwapchainTextures.size());
     }
 
     VkSwapchain::~VkSwapchain()
     {
-        vkDestroySwapchainKHR(Device, VK_NULL_HANDLE, nullptr);
+        SwapchainTextures.clear();
 
-        for (auto imageView : SwapChainImageViews)
+        for (VkImageView imageView : SwapChainImageViews)
         {
-            vkDestroyImageView(Device, imageView, nullptr);
+            if (imageView != VK_NULL_HANDLE)
+            {
+                vkDestroyImageView(Device, imageView, nullptr);
+            }
+        }
+        SwapChainImageViews.clear();
+
+        if (Swapchain != VK_NULL_HANDLE)
+        {
+            vkDestroySwapchainKHR(Device, Swapchain, nullptr);
+            Swapchain = VK_NULL_HANDLE;
         }
 
-        SwapChainImageViews.clear();
+        SwapChainImages.clear();
     }
 
     const FSwapchainDesc &VkSwapchain::GetDesc() const
     {
         return Desc;
+    }
+
+    VkVulkanTexture* VkSwapchain::GetCurrentSwapchainTexture()
+    {
+        return GetSwapchainTexture(CurrentImageIndex);
+    }
+
+    VkVulkanTexture* VkSwapchain::GetSwapchainTexture(uint32_t ImageIndex)
+    {
+        if (ImageIndex >= SwapchainTextures.size())
+        {
+            return nullptr;
+        }
+
+        return &SwapchainTextures[ImageIndex];
+    }
+
+    uint32_t VkSwapchain::GetCurrentImageIndex() const
+    {
+        return CurrentImageIndex;
+    }
+
+    void VkSwapchain::SetCurrentImageIndex(uint32_t ImageIndex)
+    {
+        if (SwapchainTextures.empty())
+        {
+            CurrentImageIndex = 0;
+            return;
+        }
+
+        CurrentImageIndex = ImageIndex % static_cast<uint32_t>(SwapchainTextures.size());
     }
 }

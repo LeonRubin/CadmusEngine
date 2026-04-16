@@ -30,4 +30,4 @@
 #else
 #define FORCE_INLINE static SDL_INLINE
 #endif
-#endif /* SDL_FORCE_INLINE not defined */
+#endif /* FORCE_INLINE not defined */

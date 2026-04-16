@@ -37,6 +37,8 @@ namespace rhi
         }
 
         EPipelineType GetType() const override { return Type; }
+        VkPipeline GetVkPipelineHandle() const { return PipelineHandle; }
+        VkPipelineLayout GetVkPipelineLayout() const { return Layout; }
     
         private:
         EPipelineType Type;

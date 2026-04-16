@@ -20,6 +20,7 @@ bool gInitialized = false;
 SDL_Window *window = nullptr;
 SDL_Surface *screenSurface = nullptr;
 rhi::IContext *gRHIContext = nullptr;
+rhi::IPipeline *gDrawTrianglePipeline = nullptr;
 
 void Init()
 {
@@ -27,7 +28,7 @@ void Init()
     spdlog::set_level(spdlog::level::info);
     spdlog::set_pattern("[%H:%M:%S] [%^%l%$] %v");
 
-    if (SDL_Init(SDL_INIT_VIDEO) < 0)
+    if (!SDL_Init(SDL_INIT_VIDEO))
     {
         SDL_Log("SDL could not initialize! SDL_Error: %s\n", SDL_GetError());
     }
@@ -98,22 +99,35 @@ void Init()
                 initParams.NumRequiredInstanceExtensions = static_cast<int>(count);
 #ifdef _WIN32
                 auto props = SDL_GetWindowProperties(window);
-                initParams.WindowHandle = SDL_GetPointerProperty(props, SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr); 
+                initParams.WindowHandle = SDL_GetPointerProperty(props, SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr);
 #endif
 
-                gRHIContext->Initialize(initParams);
+                if (!gRHIContext->Initialize(initParams))
+                {
+                    spdlog::error("Failed to initialize RHI context");
+                    return;
+                }
 
                 auto pipelineBuilder = gRHIContext->GetPipelineBuilder();
+                if (pipelineBuilder == nullptr)
+                {
+                    spdlog::error("RHI returned a null pipeline builder");
+                    return;
+                }
 
                 pipelineBuilder->SetType(rhi::EPipelineType::Graphics)
                     .SetShaderStage(rhi::EShaderStage::Vertex, "main", "Content/Shaders/helloTriangle.vert.glsl")
                     .SetShaderStage(rhi::EShaderStage::Fragment, "main", "Content/Shaders/helloTriangle.frag.glsl")
                     .SetOutput(0, rhi::EColorFormat::BGRA8_UNorm)
-                    .SetRasterizationState({.CullMode = rhi::ECullMode::Back})
+                    .SetRasterizationState({.CullMode = rhi::ECullMode::None})
                     .SetType(rhi::EPipelineType::Graphics);
 
-                auto pipeline = pipelineBuilder->Build();
-
+                gDrawTrianglePipeline = pipelineBuilder->Build();
+                if (gDrawTrianglePipeline == nullptr)
+                {
+                    spdlog::error("Failed to build draw pipeline");
+                    return;
+                }
             }
         }
     }
@@ -124,12 +138,56 @@ bool IterateEngineLoop()
     SDL_Event e;
     bool quit = false;
 
+    if (gRHIContext == nullptr || gDrawTrianglePipeline == nullptr)
+    {
+        spdlog::error("Engine loop started without a valid RHI context or pipeline");
+        return true;
+    }
+
     while (SDL_PollEvent(&e))
     {
         if (e.type == SDL_EVENT_QUIT)
         {
             quit = true;
         }
+    }
+
+    auto cmd = gRHIContext->AcquireImmediateCommandBuffer();
+    if (cmd == nullptr)
+    {
+        spdlog::error("AcquireImmediateCommandBuffer returned null");
+        return true;
+    }
+
+    if (!cmd->Begin())
+    {
+        spdlog::error("Failed to begin immediate command buffer");
+        return true;
+    }
+
+    auto swapchainTex = gRHIContext->GetCurrentSwapchainTexture();
+    if (swapchainTex.Index == INVALID_U32)
+    {
+        spdlog::error("GetCurrentSwapchainTexture returned an invalid handle");
+        return true;
+    }
+
+    cmd->BeginRenderPass({.ColorAttachments = {{.TextureHandle = swapchainTex, .LoadOp = rhi::ELoadOp::Clear, .StoreOp = rhi::EStoreOp::Store, .Format = rhi::EColorFormat::BGRA8_UNorm}}});
+    cmd->BindPipeline(gDrawTrianglePipeline);
+
+    cmd->Draw(3, 1, 0, 0);
+    cmd->EndRenderPass();
+    if (!cmd->End())
+    {
+        spdlog::error("Failed to end immediate command buffer");
+        return true;
+    }
+
+    gRHIContext->SubmitCmdBufferImmediate(cmd);
+    if (!gRHIContext->Present())
+    {
+        spdlog::error("Failed to present swapchain image");
+        return true;
     }
 
     return quit;

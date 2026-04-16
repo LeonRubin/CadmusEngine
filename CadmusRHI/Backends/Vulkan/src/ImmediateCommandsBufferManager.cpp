@@ -2,101 +2,21 @@
 
 #include "Helpers/VkHelper.hpp"
 #include "VkContext.hpp"
-
+#include "VkCommandBuffer.hpp"
 #include <algorithm>
-
-namespace
-{
-    bool SupportsFeatures(rhi::EQueueFeatures Available, rhi::EQueueFeatures Required)
-    {
-        return (Available & Required) == Required;
-    }
-
-    class FVulkanImmediateCommandBuffer final : public rhi::ICommandBuffer
-    {
-    public:
-        FVulkanImmediateCommandBuffer(VkDevice InDevice, VkCommandPool InOwnerPool, VkCommandBuffer InCommandBuffer, rhi::EQueueFeatures InQueueFeatures, uint32_t InQueueFamilyIndex, VkQueue InQueue)
-            : Device(InDevice)
-            , OwnerPool(InOwnerPool)
-            , CommandBuffer(InCommandBuffer)
-            , QueueFeatures(InQueueFeatures)
-            , QueueFamilyIndex(InQueueFamilyIndex)
-            , Queue(InQueue)
-        {
-        }
-
-        bool Begin(const rhi::FCommandBufferBeginDesc& Desc) override
-        {
-            VkCommandBufferBeginInfo beginInfo{};
-            beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-            beginInfo.flags = 0;
-
-            if (Desc.OneTimeSubmit)
-            {
-                beginInfo.flags |= VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-            }
-            if (Desc.SimultaneousUse)
-            {
-                beginInfo.flags |= VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT;
-            }
-
-            const VkResult result = vkBeginCommandBuffer(CommandBuffer, &beginInfo);
-            bRecording = (result == VK_SUCCESS);
-            return bRecording;
-        }
-
-        bool End() override
-        {
-            const VkResult result = vkEndCommandBuffer(CommandBuffer);
-            if (result == VK_SUCCESS)
-            {
-                bRecording = false;
-                return true;
-            }
-
-            return false;
-        }
-
-        bool Reset() override
-        {
-            const VkResult result = vkResetCommandBuffer(CommandBuffer, 0);
-            if (result == VK_SUCCESS)
-            {
-                bRecording = false;
-                return true;
-            }
-
-            return false;
-        }
-
-        bool IsRecording() const override
-        {
-            return bRecording;
-        }
-
-        VkCommandBuffer GetVkCommandBuffer() const { return CommandBuffer; }
-        VkCommandPool GetOwnerPool() const { return OwnerPool; }
-        VkQueue GetQueue() const { return Queue; }
-        uint32_t GetQueueFamilyIndex() const { return QueueFamilyIndex; }
-        rhi::EQueueFeatures GetQueueFeatures() const { return QueueFeatures; }
-
-    private:
-        VkDevice Device{VK_NULL_HANDLE};
-        VkCommandPool OwnerPool{VK_NULL_HANDLE};
-        VkCommandBuffer CommandBuffer{VK_NULL_HANDLE};
-        rhi::EQueueFeatures QueueFeatures{rhi::EQueueFeatures::None};
-        uint32_t QueueFamilyIndex{0};
-        VkQueue Queue{VK_NULL_HANDLE};
-        bool bRecording{false};
-    };
-}
+#include <array>
 
 using namespace rhi;
 
-rhi::vulkan::ImmediateCommandsBufferManager::ImmediateCommandsBufferManager(IContext* InContext)
+bool SupportsFeatures(EQueueFeatures Available, EQueueFeatures Required)
+{
+    return (Available & Required) == Required;
+}
+
+rhi::vulkan::ImmediateCommandsBufferManager::ImmediateCommandsBufferManager(FVulkanContext* InContext)
     : Context(InContext)
 {
-    auto* vulkanContext = dynamic_cast<FVulkanContext*>(Context);
+    auto* vulkanContext = Context;
     if (vulkanContext == nullptr)
     {
         return;
@@ -188,7 +108,7 @@ ICommandBuffer *rhi::vulkan::ImmediateCommandsBufferManager::Acquire(EQueueFeatu
 
     auto reusableIt = std::find_if(FreeCommandBuffers.begin(), FreeCommandBuffers.end(), [targetPool, RequiredFeatures](ICommandBuffer* buffer)
     {
-        auto* vkBuffer = dynamic_cast<FVulkanImmediateCommandBuffer*>(buffer);
+        auto* vkBuffer = dynamic_cast<FVulkanCommandBuffer*>(buffer);
         if (vkBuffer == nullptr)
         {
             return false;
@@ -220,7 +140,8 @@ ICommandBuffer *rhi::vulkan::ImmediateCommandsBufferManager::Acquire(EQueueFeatu
         return nullptr;
     }
 
-    auto buffer = std::make_unique<FVulkanImmediateCommandBuffer>(
+    auto buffer = std::make_unique<FVulkanCommandBuffer>(
+        Context,
         Device,
         targetPool->Pool,
         vkCommandBuffer,
@@ -234,7 +155,12 @@ ICommandBuffer *rhi::vulkan::ImmediateCommandsBufferManager::Acquire(EQueueFeatu
     return bufferPtr;
 }
 
-bool rhi::vulkan::ImmediateCommandsBufferManager::Submit(const ICommandBuffer* pCommandBuffers, size_t CommandBufferCount, bool bSyncWithPreviousSubmits)
+bool rhi::vulkan::ImmediateCommandsBufferManager::Submit(const ICommandBuffer* pCommandBuffers,
+                                                         size_t CommandBufferCount,
+                                                         bool bSyncWithPreviousSubmits,
+                                                         VkSemaphore ExternalWaitSemaphore,
+                                                         VkPipelineStageFlags ExternalWaitStageMask,
+                                                         VkSemaphore ExternalSignalSemaphore)
 {
     if (Device == VK_NULL_HANDLE || pCommandBuffers == nullptr || CommandBufferCount == 0)
     {
@@ -254,7 +180,7 @@ bool rhi::vulkan::ImmediateCommandsBufferManager::Submit(const ICommandBuffer* p
 
     for (size_t index = 0; index < CommandBufferCount; ++index)
     {
-        const auto* commandBuffer = dynamic_cast<const FVulkanImmediateCommandBuffer*>(&pCommandBuffers[index]);
+        const auto* commandBuffer = dynamic_cast<const FVulkanCommandBuffer*>(&pCommandBuffers[index]);
         if (commandBuffer == nullptr)
         {
             return false;
@@ -271,7 +197,7 @@ bool rhi::vulkan::ImmediateCommandsBufferManager::Submit(const ICommandBuffer* p
         }
 
         vkBuffers.push_back(commandBuffer->GetVkCommandBuffer());
-        submittedBuffers.push_back(const_cast<FVulkanImmediateCommandBuffer*>(commandBuffer));
+        submittedBuffers.push_back(const_cast<FVulkanCommandBuffer*>(commandBuffer));
     }
 
     if (submitQueue == VK_NULL_HANDLE)
@@ -301,7 +227,8 @@ bool rhi::vulkan::ImmediateCommandsBufferManager::Submit(const ICommandBuffer* p
     }
 
     VkFence fence = AcquireFence();
-    VkSemaphore signalSemaphore = AcquireSemaphore();
+    const bool bOwnSignalSemaphore = ExternalSignalSemaphore == VK_NULL_HANDLE;
+    VkSemaphore signalSemaphore = bOwnSignalSemaphore ? AcquireSemaphore() : ExternalSignalSemaphore;
 
     if (fence == VK_NULL_HANDLE || signalSemaphore == VK_NULL_HANDLE)
     {
@@ -311,26 +238,45 @@ bool rhi::vulkan::ImmediateCommandsBufferManager::Submit(const ICommandBuffer* p
 
     VK_CHECK_RESULT(vkResetFences(Device, 1, &fence));
 
-    VkPipelineStageFlags waitStageMask = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
     VkSemaphore waitSemaphore = VK_NULL_HANDLE;
+    VkPipelineStageFlags waitStageMask = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+    std::array<VkSemaphore, 2> waitSemaphores{};
+    std::array<VkPipelineStageFlags, 2> waitStageMasks{};
+    uint32_t waitSemaphoreCount = 0;
 
     if (bSyncWithPreviousSubmits && !Submits.empty())
     {
         waitSemaphore = Submits.back().Semaphore;
+        if (waitSemaphore != VK_NULL_HANDLE)
+        {
+            waitSemaphores[waitSemaphoreCount] = waitSemaphore;
+            waitStageMasks[waitSemaphoreCount] = waitStageMask;
+            ++waitSemaphoreCount;
+        }
+    }
+
+    if (ExternalWaitSemaphore != VK_NULL_HANDLE)
+    {
+        waitSemaphores[waitSemaphoreCount] = ExternalWaitSemaphore;
+        waitStageMasks[waitSemaphoreCount] = ExternalWaitStageMask;
+        ++waitSemaphoreCount;
     }
 
     VkSubmitInfo submitInfo{};
     submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
     submitInfo.commandBufferCount = static_cast<uint32_t>(vkBuffers.size());
     submitInfo.pCommandBuffers = vkBuffers.data();
-    submitInfo.signalSemaphoreCount = 1;
-    submitInfo.pSignalSemaphores = &signalSemaphore;
-
-    if (waitSemaphore != VK_NULL_HANDLE)
+    if (signalSemaphore != VK_NULL_HANDLE)
     {
-        submitInfo.waitSemaphoreCount = 1;
-        submitInfo.pWaitSemaphores = &waitSemaphore;
-        submitInfo.pWaitDstStageMask = &waitStageMask;
+        submitInfo.signalSemaphoreCount = 1;
+        submitInfo.pSignalSemaphores = &signalSemaphore;
+    }
+
+    if (waitSemaphoreCount > 0)
+    {
+        submitInfo.waitSemaphoreCount = waitSemaphoreCount;
+        submitInfo.pWaitSemaphores = waitSemaphores.data();
+        submitInfo.pWaitDstStageMask = waitStageMasks.data();
     }
 
     const VkResult submitResult = vkQueueSubmit(submitQueue, 1, &submitInfo, fence);
@@ -342,11 +288,24 @@ bool rhi::vulkan::ImmediateCommandsBufferManager::Submit(const ICommandBuffer* p
 
     Submits.push_back(FImmediateSubmitInfo{
         .Fence = fence,
-        .Semaphore = signalSemaphore,
+        .Semaphore = bOwnSignalSemaphore ? signalSemaphore : VK_NULL_HANDLE,
         .QueueFeatures = queueFeatures,
         .CommandBuffers = std::move(submittedBuffers)});
 
     return true;
+}
+
+VkSemaphore rhi::vulkan::ImmediateCommandsBufferManager::GetLastSubmissionSemaphore(EQueueFeatures RequiredFeatures) const
+{
+    for (auto it = Submits.rbegin(); it != Submits.rend(); ++it)
+    {
+        if ((it->QueueFeatures & RequiredFeatures) == RequiredFeatures)
+        {
+            return it->Semaphore;
+        }
+    }
+
+    return VK_NULL_HANDLE;
 }
 
 void rhi::vulkan::ImmediateCommandsBufferManager::Reset()

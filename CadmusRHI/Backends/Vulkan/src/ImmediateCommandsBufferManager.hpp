@@ -28,14 +28,21 @@ namespace rhi::vulkan
         bool bOwned{false};
     };
 
+    class FVulkanContext;
     class ImmediateCommandsBufferManager
     {
     public:
-        explicit ImmediateCommandsBufferManager(IContext* InContext);
+        explicit ImmediateCommandsBufferManager(FVulkanContext* InContext);
         ~ImmediateCommandsBufferManager();
 
         ICommandBuffer* Acquire(EQueueFeatures RequiredFeatures = EQueueFeatures::GRAPHICS);
-        bool Submit(const ICommandBuffer* pCommandBuffers, size_t CommandBufferCount, bool bSyncWithPreviousSubmits = true);
+        bool Submit(const ICommandBuffer* pCommandBuffers,
+                size_t CommandBufferCount,
+                bool bSyncWithPreviousSubmits = true,
+                VkSemaphore ExternalWaitSemaphore = VK_NULL_HANDLE,
+                    VkPipelineStageFlags ExternalWaitStageMask = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                    VkSemaphore ExternalSignalSemaphore = VK_NULL_HANDLE);
+        VkSemaphore GetLastSubmissionSemaphore(EQueueFeatures RequiredFeatures) const;
         
         void Reset();
 
@@ -50,7 +57,7 @@ namespace rhi::vulkan
         VkSemaphore AcquireSemaphore();
         void RecycleSyncObjects(VkFence Fence, VkSemaphore Semaphore);
         
-        IContext* Context{nullptr};
+        FVulkanContext* Context{nullptr};
         VkDevice Device{VK_NULL_HANDLE};
         std::vector<FCommandPoolEntry> CommandPools;
 

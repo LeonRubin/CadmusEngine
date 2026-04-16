@@ -79,6 +79,9 @@ namespace rhi::vulkan
         const VkDebugUtilsMessengerCallbackDataEXT *pCallbackData,
         void *pUserData)
     {
+        (void)messageType;
+        (void)pUserData;
+
         if (messageSeverity > VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT && messageSeverity < VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT)
         {
             LogRHI(rhi::RHI_LOGLEVEL_WARNING, pCallbackData->pMessage);
@@ -310,7 +313,7 @@ namespace rhi::vulkan
         VK_CHECK_RESULT(vkCreateWin32SurfaceKHR(Instance, &surfaceCreateInfo, nullptr, &Surface));
 #endif
 
-        uint32_t deviceCount = AdapterInfos.size();
+        uint32_t deviceCount = static_cast<uint32_t>(AdapterInfos.size());
         std::vector<VkPhysicalDevice> physicalDevices(deviceCount);
         vkEnumeratePhysicalDevices(Instance, &deviceCount, physicalDevices.data());
 
@@ -351,24 +354,110 @@ namespace rhi::vulkan
 
         SelectedAdapter = new VkGraphicsAdapter(AdapterInfos[physicalDeviceID], adapterCreateInfo);
 
-        Swapchain = new VkSwapchain(SelectedAdapter->GetDevice(), PhysicalDevice, Surface);
+        const VkDevice device = SelectedAdapter->GetDevice();
+        if (device == VK_NULL_HANDLE)
+        {
+            LogRHI(rhi::RHI_LOGLEVEL_ERROR, "Initialize failed: selected Vulkan adapter returned a null device.");
+            return false;
+        }
+
+        PresentQueue = VK_NULL_HANDLE;
+        PresentQueueFamilyIndex = 0;
+        for (const FVkQueueFamilyInfo &queueFamilyInfo : ActiveQueueFamilyInfos)
+        {
+            if (queueFamilyInfo.bSupportsPresent)
+            {
+                PresentQueueFamilyIndex = queueFamilyInfo.FamilyIndex;
+                vkGetDeviceQueue(device, PresentQueueFamilyIndex, 0, &PresentQueue);
+                break;
+            }
+        }
+
+        if (PresentQueue == VK_NULL_HANDLE)
+        {
+            LogRHI(rhi::RHI_LOGLEVEL_ERROR, "Initialize failed: unable to acquire a present-capable queue.");
+            return false;
+        }
+
+        Swapchain = new VkSwapchain(device, PhysicalDevice, Surface);
+
+        SwapchainTextureHandles.clear();
+        SwapchainTextureHandles.reserve(Swapchain->GetDesc().BufferCount);
+        for (uint32_t imageIndex = 0; imageIndex < Swapchain->GetDesc().BufferCount; ++imageIndex)
+        {
+            VkVulkanTexture* swapchainTexture = Swapchain->GetSwapchainTexture(imageIndex);
+            if (swapchainTexture == nullptr)
+            {
+                LogRHI(rhi::RHI_LOGLEVEL_ERROR, "Initialize failed: swapchain texture is null.");
+                return false;
+            }
+
+            if (swapchainTexture->GetDevice() == VK_NULL_HANDLE ||
+                swapchainTexture->GetImage() == VK_NULL_HANDLE ||
+                swapchainTexture->GetImageView() == VK_NULL_HANDLE)
+            {
+                LogRHI(rhi::RHI_LOGLEVEL_ERROR, "Initialize failed: swapchain texture contains null Vulkan handles.");
+                return false;
+            }
+
+            THandle<VkVulkanTexture> swapchainTextureHandle{};
+            TextureHandles.AllocateHandle(
+                swapchainTextureHandle,
+                GetDevice(),
+                swapchainTexture->GetImage(),
+                swapchainTexture->GetImageView(),
+                swapchainTexture->GetCreateInfo(),
+                false,
+                false);
+
+            SwapchainTextureHandles.push_back(swapchainTextureHandle);
+        }
 
         ImmediateCmdBufferManager = new ImmediateCommandsBufferManager(this);
+
+        VkFenceCreateInfo acquireFenceCreateInfo{};
+        acquireFenceCreateInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+        const VkResult acquireFenceResult = vkCreateFence(device, &acquireFenceCreateInfo, nullptr, &SwapchainImageAcquireFence);
+        if (acquireFenceResult != VK_SUCCESS || SwapchainImageAcquireFence == VK_NULL_HANDLE)
+        {
+            LogRHI(rhi::RHI_LOGLEVEL_ERROR, "Initialize failed: unable to create swapchain image-acquire fence.");
+            return false;
+        }
+
+        VkSemaphoreCreateInfo semaphoreCreateInfo{};
+        semaphoreCreateInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+        SwapchainRenderFinishedSemaphores.assign(Swapchain->GetDesc().BufferCount, VK_NULL_HANDLE);
+        for (uint32_t imageIndex = 0; imageIndex < Swapchain->GetDesc().BufferCount; ++imageIndex)
+        {
+            VkSemaphore renderFinishedSemaphore = VK_NULL_HANDLE;
+            const VkResult rfResult = vkCreateSemaphore(device, &semaphoreCreateInfo, nullptr, &renderFinishedSemaphore);
+            if (rfResult != VK_SUCCESS || renderFinishedSemaphore == VK_NULL_HANDLE)
+            {
+                LogRHI(rhi::RHI_LOGLEVEL_ERROR, "Initialize failed: unable to create swapchain render-finished semaphore.");
+                return false;
+            }
+
+            SwapchainRenderFinishedSemaphores[imageIndex] = renderFinishedSemaphore;
+        }
+
+        bSwapchainImageAcquired = false;
+        AcquiredSwapchainImageIndex = INVALID_U32;
+
         return true;
     }
 
-    rhi::IPipelineBuilder* FVulkanContext::GetPipelineBuilder()
+    rhi::IPipelineBuilder *FVulkanContext::GetPipelineBuilder()
     {
         return new VkPipelineBuilder(SelectedAdapter->GetDevice());
     }
 
-    rhi::ICommandBuffersPool* FVulkanContext::GetCommandBuffersPool(EQueueFeatures RequiredFeatures)
+    rhi::ICommandBuffersPool *FVulkanContext::GetCommandBuffersPool(EQueueFeatures RequiredFeatures)
     {
         (void)RequiredFeatures;
         return nullptr;
     }
 
-    rhi::ICommandBuffer* FVulkanContext::AcquireImmediateCommandBuffer(EQueueFeatures RequiredFeatures)
+    rhi::ICommandBuffer *FVulkanContext::AcquireImmediateCommandBuffer(EQueueFeatures RequiredFeatures)
     {
         assert(ImmediateCmdBufferManager != nullptr);
         return ImmediateCmdBufferManager->Acquire(RequiredFeatures);
@@ -379,14 +468,14 @@ namespace rhi::vulkan
         return SelectedAdapter != nullptr ? SelectedAdapter->GetDevice() : VK_NULL_HANDLE;
     }
 
-    bool FVulkanContext::AcquireImmediateCommandPool(EQueueFeatures RequiredFeatures, VkCommandPool& OutPool, uint32_t& OutQueueFamilyIndex, VkQueue& OutQueue, EQueueFeatures& OutQueueFeatures)
+    bool FVulkanContext::AcquireImmediateCommandPool(EQueueFeatures RequiredFeatures, VkCommandPool &OutPool, uint32_t &OutQueueFamilyIndex, VkQueue &OutQueue, EQueueFeatures &OutQueueFeatures)
     {
         OutPool = VK_NULL_HANDLE;
         OutQueueFamilyIndex = 0;
         OutQueue = VK_NULL_HANDLE;
         OutQueueFeatures = EQueueFeatures::None;
 
-        for (const FVkImmediatePoolEntry& poolEntry : ImmediatePools)
+        for (const FVkImmediatePoolEntry &poolEntry : ImmediatePools)
         {
             if ((poolEntry.QueueFeatures & RequiredFeatures) == RequiredFeatures)
             {
@@ -426,6 +515,262 @@ namespace rhi::vulkan
             .QueueFamilyIndex = OutQueueFamilyIndex,
             .QueueFeatures = OutQueueFeatures});
 
+        return true;
+    }
+
+    THandle<ITexture> FVulkanContext::CreateTexture(const FTextureCreateInfo &CreateInfo)
+    {
+        THandle<ITexture> invalidHandle{INVALID_U32, INVALID_U32};
+        const VkDevice device = GetDevice();
+
+        if (device == VK_NULL_HANDLE || PhysicalDevice == VK_NULL_HANDLE)
+        {
+            LogRHI(rhi::RHI_LOGLEVEL_ERROR, "CreateTexture failed: Vulkan context is not initialized.");
+            return invalidHandle;
+        }
+
+        if (CreateInfo.Format == EColorFormat::Unknown)
+        {
+            LogRHI(rhi::RHI_LOGLEVEL_ERROR, "CreateTexture failed: unknown texture format.");
+            return invalidHandle;
+        }
+
+        if (CreateInfo.Extent.Width == 0 || CreateInfo.Extent.Height == 0 || CreateInfo.Extent.Depth == 0)
+        {
+            LogRHI(rhi::RHI_LOGLEVEL_ERROR, "CreateTexture failed: texture extent must be greater than zero.");
+            return invalidHandle;
+        }
+
+        if (CreateInfo.MipLevels == 0)
+        {
+            LogRHI(rhi::RHI_LOGLEVEL_ERROR, "CreateTexture failed: mip level count must be greater than zero.");
+            return invalidHandle;
+        }
+
+        if (CreateInfo.ArrayLayers == 0)
+        {
+            LogRHI(rhi::RHI_LOGLEVEL_ERROR, "CreateTexture failed: array layer count must be greater than zero.");
+            return invalidHandle;
+        }
+
+        if (CreateInfo.Usage == ETextureUsageFlags::None)
+        {
+            LogRHI(rhi::RHI_LOGLEVEL_ERROR, "CreateTexture failed: texture usage flags cannot be empty.");
+            return invalidHandle;
+        }
+
+        switch (CreateInfo.Type)
+        {
+        case ETextureType::Texture2D:
+            if (CreateInfo.Extent.Depth != 1)
+            {
+                LogRHI(rhi::RHI_LOGLEVEL_ERROR, "CreateTexture failed: 2D textures must have depth equal to 1.");
+                return invalidHandle;
+            }
+            break;
+        case ETextureType::Texture3D:
+            if (CreateInfo.ArrayLayers != 1)
+            {
+                LogRHI(rhi::RHI_LOGLEVEL_ERROR, "CreateTexture failed: 3D textures cannot use array layers.");
+                return invalidHandle;
+            }
+
+            if (CreateInfo.SampleCount != 1)
+            {
+                LogRHI(rhi::RHI_LOGLEVEL_ERROR, "CreateTexture failed: 3D textures do not support multisampling.");
+                return invalidHandle;
+            }
+            break;
+        default:
+            LogRHI(rhi::RHI_LOGLEVEL_ERROR, "CreateTexture failed: unsupported texture type.");
+            return invalidHandle;
+        }
+
+        const VkFormat vkFormat = ConvertColorFormat(CreateInfo.Format);
+        if (vkFormat == VK_FORMAT_UNDEFINED)
+        {
+            LogRHI(rhi::RHI_LOGLEVEL_ERROR, "CreateTexture failed: texture format is not supported by Vulkan conversion.");
+            return invalidHandle;
+        }
+
+        VkSampleCountFlagBits vkSampleCount = VK_SAMPLE_COUNT_1_BIT;
+        if (CreateInfo.SampleCount > 64)
+        {
+            LogRHI(rhi::RHI_LOGLEVEL_ERROR, "CreateTexture failed: sample count exceeds maximum supported value.");
+            return invalidHandle;
+        }
+
+        vkSampleCount = ConvertSampleCount(CreateInfo.SampleCount);
+
+        const VkImageType vkImageType = ConvertImageType(CreateInfo.Type);
+        const VkImageUsageFlags vkUsageFlags = ConvertTextureUsageFlags(CreateInfo.Usage);
+
+        VkImageFormatProperties formatProperties{};
+        const VkResult formatResult = vkGetPhysicalDeviceImageFormatProperties(
+            PhysicalDevice,
+            vkFormat,
+            vkImageType,
+            VK_IMAGE_TILING_OPTIMAL,
+            vkUsageFlags,
+            0,
+            &formatProperties);
+
+        if (formatResult != VK_SUCCESS)
+        {
+            LogRHI(rhi::RHI_LOGLEVEL_ERROR, "CreateTexture failed: requested texture configuration is not supported by the selected Vulkan device.");
+            return invalidHandle;
+        }
+
+        const uint32_t requestedDepth = CreateInfo.Type == ETextureType::Texture2D ? 1u : CreateInfo.Extent.Depth;
+        if (CreateInfo.Extent.Width > formatProperties.maxExtent.width ||
+            CreateInfo.Extent.Height > formatProperties.maxExtent.height ||
+            requestedDepth > formatProperties.maxExtent.depth)
+        {
+            LogRHI(rhi::RHI_LOGLEVEL_ERROR, "CreateTexture failed: requested texture extent exceeds device limits.");
+            return invalidHandle;
+        }
+
+        if (CreateInfo.MipLevels > formatProperties.maxMipLevels)
+        {
+            LogRHI(rhi::RHI_LOGLEVEL_ERROR, "CreateTexture failed: requested mip count exceeds device limits.");
+            return invalidHandle;
+        }
+
+        if (CreateInfo.Type != ETextureType::Texture3D && CreateInfo.ArrayLayers > formatProperties.maxArrayLayers)
+        {
+            LogRHI(rhi::RHI_LOGLEVEL_ERROR, "CreateTexture failed: requested array layer count exceeds device limits.");
+            return invalidHandle;
+        }
+
+        if ((formatProperties.sampleCounts & vkSampleCount) == 0)
+        {
+            LogRHI(rhi::RHI_LOGLEVEL_ERROR, "CreateTexture failed: requested sample count is not supported for this texture configuration.");
+            return invalidHandle;
+        }
+
+        THandle<VkVulkanTexture> textureHandle{};
+        TextureHandles.AllocateHandle(textureHandle, device, PhysicalDevice, CreateInfo);
+
+        return THandle<ITexture>{textureHandle.Index, textureHandle.Generation};
+    }
+
+    VkVulkanTexture *FVulkanContext::GetTexture(const THandle<ITexture> &TextureHandle)
+    {
+        return TextureHandles.Get(RebindHandle<VkVulkanTexture>(TextureHandle));
+    }
+
+    THandle<ITexture> FVulkanContext::GetCurrentSwapchainTexture()
+    {
+        THandle<ITexture> invalidHandle{INVALID_U32, INVALID_U32};
+
+        if (Swapchain == nullptr || SwapchainImageAcquireFence == VK_NULL_HANDLE)
+        {
+            return invalidHandle;
+        }
+
+        if (!bSwapchainImageAcquired)
+        {
+            VK_CHECK_RESULT(vkResetFences(GetDevice(), 1, &SwapchainImageAcquireFence));
+            uint32_t imageIndex = 0;
+            const VkResult acquireResult = vkAcquireNextImageKHR(
+                GetDevice(),
+                Swapchain->GetHandle(),
+                UINT64_MAX,
+                VK_NULL_HANDLE,
+                SwapchainImageAcquireFence,
+                &imageIndex);
+
+            if (acquireResult != VK_SUCCESS && acquireResult != VK_SUBOPTIMAL_KHR)
+            {
+                LogRHI(rhi::RHI_LOGLEVEL_ERROR, "GetCurrentSwapchainTexture failed: vkAcquireNextImageKHR was unsuccessful.");
+                return invalidHandle;
+            }
+
+            VK_CHECK_RESULT(vkWaitForFences(GetDevice(), 1, &SwapchainImageAcquireFence, VK_TRUE, UINT64_MAX));
+
+            Swapchain->SetCurrentImageIndex(imageIndex);
+            AcquiredSwapchainImageIndex = imageIndex;
+            bSwapchainImageAcquired = true;
+        }
+
+        const uint32_t currentImageIndex = Swapchain->GetCurrentImageIndex();
+        if (currentImageIndex >= SwapchainTextureHandles.size())
+        {
+            return invalidHandle;
+        }
+
+        const THandle<VkVulkanTexture>& textureHandle = SwapchainTextureHandles[currentImageIndex];
+        return THandle<ITexture>{textureHandle.Index, textureHandle.Generation};
+    }
+
+    void FVulkanContext::SubmitCmdBufferImmediate(const ICommandBuffer *pCommandBuffers, size_t CommandBufferCount, bool bSyncWithPreviousSubmits)
+    {
+        assert(ImmediateCmdBufferManager != nullptr);
+        assert(pCommandBuffers != nullptr);
+
+        VkSemaphore externalSignalSemaphore = VK_NULL_HANDLE;
+        if (bSwapchainImageAcquired)
+        {
+            if (AcquiredSwapchainImageIndex < SwapchainRenderFinishedSemaphores.size())
+            {
+                externalSignalSemaphore = SwapchainRenderFinishedSemaphores[AcquiredSwapchainImageIndex];
+            }
+        }
+
+        const bool submitted = ImmediateCmdBufferManager->Submit(
+            pCommandBuffers,
+            CommandBufferCount,
+            bSyncWithPreviousSubmits,
+            VK_NULL_HANDLE,
+            VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+            externalSignalSemaphore);
+        (void)submitted;
+    }
+
+    bool FVulkanContext::Present(bool bSyncWithPreviousSubmits)
+    {
+        if (Swapchain == nullptr || PresentQueue == VK_NULL_HANDLE || !bSwapchainImageAcquired)
+        {
+            return false;
+        }
+
+        VkSemaphore waitSemaphore = VK_NULL_HANDLE;
+        uint32_t waitSemaphoreCount = 0;
+        if (bSyncWithPreviousSubmits)
+        {
+            if (AcquiredSwapchainImageIndex < SwapchainRenderFinishedSemaphores.size())
+            {
+                waitSemaphore = SwapchainRenderFinishedSemaphores[AcquiredSwapchainImageIndex];
+            }
+
+            if (waitSemaphore == VK_NULL_HANDLE)
+            {
+                LogRHI(rhi::RHI_LOGLEVEL_ERROR, "Present failed: no render-finished semaphore available for the acquired swapchain image.");
+                return false;
+            }
+
+            waitSemaphoreCount = 1;
+        }
+
+        const uint32_t imageIndex = Swapchain->GetCurrentImageIndex();
+        VkSwapchainKHR swapchainHandle = Swapchain->GetHandle();
+        VkPresentInfoKHR presentInfo{};
+        presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+        presentInfo.waitSemaphoreCount = waitSemaphoreCount;
+        presentInfo.pWaitSemaphores = waitSemaphoreCount > 0 ? &waitSemaphore : nullptr;
+        presentInfo.swapchainCount = 1;
+        presentInfo.pSwapchains = &swapchainHandle;
+        presentInfo.pImageIndices = &imageIndex;
+
+        const VkResult presentResult = vkQueuePresentKHR(PresentQueue, &presentInfo);
+        if (presentResult != VK_SUCCESS && presentResult != VK_SUBOPTIMAL_KHR)
+        {
+            LogRHI(rhi::RHI_LOGLEVEL_ERROR, "Present failed: vkQueuePresentKHR returned an error.");
+            return false;
+        }
+
+        bSwapchainImageAcquired = false;
+        AcquiredSwapchainImageIndex = INVALID_U32;
         return true;
     }
 
@@ -499,7 +844,30 @@ namespace rhi::vulkan
             if (SelectedAdapter)
             {
                 VkDevice device = SelectedAdapter->GetDevice();
-                for (const FVkImmediatePoolEntry& poolEntry : ImmediatePools)
+
+                delete ImmediateCmdBufferManager;
+                ImmediateCmdBufferManager = nullptr;
+
+                if (SwapchainImageAcquireFence != VK_NULL_HANDLE)
+                {
+                    vkDestroyFence(device, SwapchainImageAcquireFence, nullptr);
+                    SwapchainImageAcquireFence = VK_NULL_HANDLE;
+                }
+
+                for (VkSemaphore semaphore : SwapchainRenderFinishedSemaphores)
+                {
+                    if (semaphore != VK_NULL_HANDLE)
+                    {
+                        vkDestroySemaphore(device, semaphore, nullptr);
+                    }
+                }
+                SwapchainRenderFinishedSemaphores.clear();
+
+                TextureHandles.Clear();
+                SwapchainTextureHandles.clear();
+                delete Swapchain;
+                Swapchain = nullptr;
+                for (const FVkImmediatePoolEntry &poolEntry : ImmediatePools)
                 {
                     if (poolEntry.Pool != VK_NULL_HANDLE)
                     {
@@ -512,14 +880,19 @@ namespace rhi::vulkan
                 SelectedAdapter = nullptr;
             }
 
+            PresentQueue = VK_NULL_HANDLE;
+            PresentQueueFamilyIndex = 0;
+            bSwapchainImageAcquired = false;
+            AcquiredSwapchainImageIndex = INVALID_U32;
+
             vkDestroyInstance(Instance, nullptr);
             Instance = VK_NULL_HANDLE;
         }
     }
 
-    bool FVulkanContext::FindQueueFamilyForFeatures(EQueueFeatures RequiredFeatures, uint32_t& OutQueueFamilyIndex, EQueueFeatures& OutQueueFeatures) const
+    bool FVulkanContext::FindQueueFamilyForFeatures(EQueueFeatures RequiredFeatures, uint32_t &OutQueueFamilyIndex, EQueueFeatures &OutQueueFeatures) const
     {
-        for (const FVkQueueFamilyInfo& queueFamilyInfo : ActiveQueueFamilyInfos)
+        for (const FVkQueueFamilyInfo &queueFamilyInfo : ActiveQueueFamilyInfos)
         {
             if (queueFamilyInfo.SupportsFeatures(RequiredFeatures))
             {

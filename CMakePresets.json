@@ -3,35 +3,27 @@
     "configurePresets": [
         {
             "name": "ninja-base",
-      "displayName": "Ninja (base)",
-      "generator": "Ninja",
-      "binaryDir": "${sourceDir}/build-ninja",
-      "environment": {
-        "VCPKG_DOWNLOADS": "${sourceDir}/.vcpkg/downloads",
-        "VCPKG_DEFAULT_BINARY_CACHE": "${sourceDir}/.vcpkg/bincache"
-      },
-      "cacheVariables": {
-        "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
-        "CMAKE_MAKE_PROGRAM": "${sourceDir}/.vcpkg/tools/ninja/ninja.exe",
-        "CMAKE_C_COMPILER": "cl",
-        "CMAKE_CXX_COMPILER": "cl"
-      }
+            "displayName": "Visual Studio 2022 (base)",
+            "generator": "Visual Studio 17 2022",
+            "binaryDir": "${sourceDir}/build-vs2022",
+            "architecture": "x64",
+            "environment": {
+                "VCPKG_DOWNLOADS": "${sourceDir}/.vcpkg/downloads",
+                "VCPKG_DEFAULT_BINARY_CACHE": "${sourceDir}/.vcpkg/bincache"
+            },
+            "cacheVariables": {
+                "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
+            }
         },
         {
             "name": "ninja-debug",
-            "displayName": "Ninja Debug",
-            "inherits": "ninja-base",
-            "cacheVariables": {
-                "CMAKE_BUILD_TYPE": "Debug"
-            }
+            "displayName": "Visual Studio 2022 Debug",
+            "inherits": "ninja-base"
         },
         {
             "name": "ninja-release",
-            "displayName": "Ninja Release",
-            "inherits": "ninja-base",
-            "cacheVariables": {
-                "CMAKE_BUILD_TYPE": "Release"
-            }
+            "displayName": "Visual Studio 2022 Release",
+            "inherits": "ninja-base"
         }
     ],
     "buildPresets": [
@@ -39,7 +31,8 @@
             "name": "Debug",
             "description": "",
             "displayName": "",
-            "configurePreset": "ninja-debug"
+            "configurePreset": "ninja-debug",
+            "configuration": "Debug"
         }
     ]
 }
